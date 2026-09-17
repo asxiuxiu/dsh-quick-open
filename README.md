@@ -37,7 +37,7 @@ DSH Web GUI 插件：VSCode 式 `Ctrl+P` 快速打开，**索引级搜索性能*
 dsh plugin --profile web add dsh-better-sidebar
 
 # 本插件（GitHub 源 / npm 源 / 本地 link 三选一）
-dsh plugin --profile web add github:<you>/dsh-quick-open
+dsh plugin --profile web add github:asxiuxiu/dsh-quick-open
 dsh plugin --profile web add dsh-quick-open
 dsh plugin --profile web add link:D:/dev/dsh-quick-open   # 本地开发
 ```
