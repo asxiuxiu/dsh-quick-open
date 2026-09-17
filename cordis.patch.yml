@@ -1,0 +1,12 @@
+# dsh-quick-open bundle patch
+#
+# bundle 自挂载：通过官方 CLI 安装（dsh plugin --profile <name> add <pkg>）时，
+# 安装器看到 `dsh.bundle.patch` 声明会把本 patch 合入 profile 的挂载栈，
+# 无需手工编辑 profile 的 cordis.patch.yml。
+#
+# 行的 `name` 必须是包名原样 —— 它既是 host 半的 Node 导入说明符，
+# 也是 dsh-client-modules 扫描「浏览器半」的键。id 与 name 保持一致，
+# 使 client bundle 的 __ModuleLoader__ 注册 id 与 loader entry id 对齐。
+- insert:
+    - id: dsh-quick-open
+      name: 'dsh-quick-open'
