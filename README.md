@@ -31,6 +31,28 @@ DSH Web GUI 插件：VSCode 式 `Ctrl+P` 快速打开，**索引级搜索性能 
 | 平局 | 命中越紧凑优先（跨度过大者降级），再由路径长度兜底——保证结果顺序稳定 |
 | 门槛 | 查询片必须是目标的子序列才进入矩阵打分（保守预筛，不会漏掉真实命中） |
 
+### 带 `/` 的路径查询：逐段锚定
+
+**这是匹配质量上最关键的一条规则。** 查询里带 `/` 时（`login/index.html`），不会把整串当成一条子序列在完整路径上匹配，而是**按 `/` 拆开，每段必须在单个路径段内找到**：
+
+| 规则 | 说明 |
+|---|---|
+| 目录段必须**连续** | `login` 必须是某个目录名里连续出现的一段 |
+| 文件名段必须**连续且落在 basename 里** | `index.html` 必须是文件名的一部分 |
+| 各段**从左到右**依次消耗路径段 | `source/client/client_module` 要求 `source` 在前、`client` 在其后 |
+
+**为什么必须这样**：不锚定的话，`login/index.html` 会把 `l-o-g-i-n` 从五个互不相关的目录里各取一个字母拼出来——
+
+```
+E:/cb2_master/dev/wo[l]fgang/_games/pr[o]ven_[g]round/_content/ui/coherent/black_curta[i][n][/]index.html
+```
+
+实测该查询有 **27,002 条**（占全库 52.7%）这种散落命中，而真正正确的只有 **204 条**——正确答案被埋在 130:1 的噪音里。锚定后 `login/index.html` 从 **620 条收敛到 7 条，全部正确**。
+
+同理 `game_scene/chaos_game_scene` 从 9 条收敛到 **1 条**，`source/client/client_module` 从 25 条收敛到 **2 条**（正是 `client_module.h` / `.cpp`）。
+
+该规则**只作用于带 `/` 的查询**：42 条不含分隔符的查询经对比测试与改动前逐条一致。
+
 ### 作用域前缀：`dir:` / `file:`
 
 每个空格分隔的词都可以带前缀，限定它只能在哪里匹配：
@@ -41,12 +63,10 @@ DSH Web GUI 插件：VSCode 式 `Ctrl+P` 快速打开，**索引级搜索性能 
 | `d:ui index.html` | 同上（简写） |
 | `file:index.html` | 只匹配文件名，不回落到路径 |
 | `f:index.html` | 同上（简写） |
-| `ui/index.html` | 带 `/` 等价于路径查询（VSCode 行为） |
-
-解决的就是下面「已知边界」里那个问题——**用显式前缀代替自动猜测**。
+| `ui/index.html` | 带 `/` 等价于路径查询（逐段锚定，见上） |
 
 - **零索引体积**：纯查询解析，不新增任何索引结构
-- **零默认行为改动**：不带前缀时逐字节等价于原行为（有 44 条查询的对比测试证明，见 `scripts/verify-no-regression.mjs`）
+- **零默认行为改动**：不带 `/` 也不带前缀时逐字节等价于原行为（对比测试见 `scripts/verify-no-regression.mjs`）
 - 前缀只在**词首**识别；`e:foo`（Windows 盘符）、`a:bc` 这类含冒号的词按字面处理
 - 半成品前缀（如刚敲下 `dir:`）不产生约束，不会把结果清空
 - 代价：`dir:` 查询要按路径打分，实测 22–48ms（普通查询 ~7ms）。这是显式高级查询，可接受
@@ -177,7 +197,7 @@ npm run typecheck
 
 # 验证脚本（均针对真实工作区索引，需先按脚本内路径配置工作区）
 node scripts/verify.mjs                  # 匹配质量回归（含 dir:/file: 用例）
-node scripts/verify-no-regression.mjs    # 对比 HEAD 与当前：证明无前缀查询行为未变
+node scripts/verify-no-regression.mjs    # 对比 HEAD 与当前：证明不含分隔符的查询行为未变
 node scripts/verify-grammar.mjs          # dir:/file: 前缀解析边界用例
 node --expose-gc scripts/eval-cost.mjs   # 索引体积基线 + 候选结构代价
 node scripts/eval-ambiguity.mjs          # 目录名歧义量化

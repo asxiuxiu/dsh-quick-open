@@ -138,8 +138,23 @@ const cases = [
   ['dir:client chaos_client_tick', 'client'],
   ['file:index.html', 'index.html'],
   ['d:ui index.html', '_content/ui/'],
+  // --- new: separator-carrying path queries are matched SEGMENT BY SEGMENT.
+  // These guard the fix for `login/index.html` ranking
+  // `.../black_curtain/index.html` second by harvesting l-o-g-i-n across five
+  // unrelated directories.
+  ['login/index.html', 'coherent/login'],
+  ['bag/index.html', 'coherent/bag/'],
+  ['game_scene/chaos_game_scene', 'game_scene/'],
+  ['source/client/client_module', 'client_module'],
+]
+// Cases whose ONLY requirement is that a known-bad row must not appear.
+const mustExclude = [
+  ['login/index.html', ['black_curtain', 'chat_log_window', 'loading_info_box']],
+  ['bag/index.html', ['black_curtain']],
+  ['_scripts/client/client_module', ['boat_module', 'modular_engine']],
 ]
 let pass = 0
+let excludedPass = 0
 const times = []
 for (const [q, expect] of cases) {
   const t0 = performance.now()
@@ -156,5 +171,17 @@ for (const [q, expect] of cases) {
     console.log(`        ${String(row.score).padStart(8)} name[${ns}] dir[${ds}] ${row.path}`)
   }
 }
+
+// Negative assertions: a known-bad row must not be returned at all.
+for (const [q, forbidden] of mustExclude) {
+  const r = query(q, 100000)
+  const found = r.rows.filter(row => forbidden.some(f => row.path.includes(f)))
+  const ok = found.length === 0
+  if (ok) excludedPass++
+  console.log(`\n${ok ? 'OK  ' : 'FAIL'} "${q}" excludes ${forbidden.join(' / ')} [${r.total} hits]`)
+  for (const row of found.slice(0, 3)) console.log(`        LEAKED ${row.path}`)
+}
+
 times.sort((a, b) => a - b)
-console.log(`\n${'='.repeat(70)}\nPASS ${pass}/${cases.length}  median=${times[Math.floor(times.length/2)].toFixed(1)}ms  p90=${times[Math.floor(times.length*0.9)].toFixed(1)}ms  max=${times[times.length-1].toFixed(1)}ms`)
+const total = cases.length + mustExclude.length
+console.log(`\n${'='.repeat(70)}\nPASS ${pass + excludedPass}/${total}  median=${times[Math.floor(times.length/2)].toFixed(1)}ms  p90=${times[Math.floor(times.length*0.9)].toFixed(1)}ms  max=${times[times.length-1].toFixed(1)}ms`)

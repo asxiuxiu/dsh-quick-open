@@ -102,36 +102,28 @@ try {
   console.log('could not load the previous version from git:', error.message)
 }
 
-function run(mod, text, useNewApi) {
+/**
+ * Compare HEAD against the working tree using the SAME (current) API.
+ *
+ * Both sides expose `prepareQuery` / `scoreEntry` with the `PreparedQuery`
+ * signature, so the only difference under test is the scoring logic itself.
+ * Keeping one code path here means a signature change cannot silently turn
+ * this guard into a no-op.
+ */
+function run(mod, text) {
   const max = 200
-  let pieces, pathQuery, normalized
-  let scratch
-  if (useNewApi) {
-    const prepared = mod.prepareQuery(text)
-    if (prepared.pieces.length === 0) return { rows: [], total: 0 }
-    let lp = 1
-    for (const p of prepared.pieces) if (p.text.length > lp) lp = p.text.length
-    let lpath = 1
-    for (const e of entries) if (e.pathLower.length > lpath) lpath = e.pathLower.length
-    scratch = mod.createMatchScratch(lp, lpath)
-    var preparedQuery = prepared
-  } else {
-    normalized = text.trim().toLowerCase()
-    pieces = normalized.split(/\s+/u).filter(Boolean)
-    if (pieces.length === 0) return { rows: [], total: 0 }
-    pathQuery = normalized.includes('/') || normalized.includes('\\')
-    let lp = 1
-    for (const p of pieces) if (p.length > lp) lp = p.length
-    let lpath = 1
-    for (const e of entries) if (e.pathLower.length > lpath) lpath = e.pathLower.length
-    scratch = mod.createMatchScratch(lp, lpath)
-  }
+  const prepared = mod.prepareQuery(text)
+  if (prepared.pieces.length === 0) return { rows: [], total: 0 }
+  let longestPiece = 1
+  for (const p of prepared.pieces) if (p.text.length > longestPiece) longestPiece = p.text.length
+  let longestPath = 1
+  for (const e of entries) if (e.pathLower.length > longestPath) longestPath = e.pathLower.length
+  const scratch = mod.createMatchScratch(longestPiece, longestPath)
+
   const scored = []
   for (const entry of entries) {
     const name = entry.path.slice(entry.path.length - entry.nameLower.length)
-    const r = useNewApi
-      ? mod.scoreEntry(preparedQuery, name, entry.nameLower, entry.path, entry.pathLower, scratch)
-      : mod.scoreEntry(normalized, pieces, name, entry.nameLower, entry.path, entry.pathLower, scratch)
+    const r = mod.scoreEntry(prepared, name, entry.nameLower, entry.path, entry.pathLower, scratch)
     if (r === undefined) continue
     scored.push({ ...r, path: entry.path })
   }
@@ -139,15 +131,17 @@ function run(mod, text, useNewApi) {
   return { rows: scored.slice(0, max).map(r => r.path), total: scored.length }
 }
 
-// A broad corpus of prefix-free queries, including the ones that regressed
-// during development, plus multi-piece and separator forms.
+/**
+ * Queries with NO path separator. Those must be byte-identical to HEAD: the
+ * segment-anchoring change only applies to separator-carrying pieces.
+ */
 const queries = [
   'clntmod', 'playerctrl', 'apprpc', 'evtmgr', 'chronoevt', 'rendersys',
   'client module', 'render system', 'game scene manager', 'rpc app', 'nsd app',
   'lua game scene', 'clientmodule', 'chrono events', 'post process',
   'index.html', 'game scene', 'client module cpp', 'rpc app nsd',
-  'source/client/client_module', 'chaos client module',
-  'cm', 'nsd', 'h', 'cc', 'game', 'lua', 'nsd', 'cmake', 'quick open',
+  'chaos client module',
+  'cm', 'nsd', 'h', 'cc', 'game', 'lua', 'cmake', 'quick open',
   'material ast', 'index.html ui', 'ui index', 'a', 'e', 'p', 'lua client',
   'render', 'scene', 'manager', 'post', 'event', 'chaos', 'client',
 ]
@@ -157,12 +151,12 @@ if (previous === null) {
   process.exit(0)
 }
 
-console.log(`\ncomparing ${queries.length} prefix-free queries: previous (HEAD) vs current\n`)
+console.log(`\ncomparing ${queries.length} separator-free queries: previous (HEAD) vs current\n`)
 let identical = 0
 const diffs = []
 for (const q of queries) {
-  const a = run(previous, q, false)
-  const b = run(current, q, true)
+  const a = run(previous, q)
+  const b = run(current, q)
   const same = a.total === b.total && a.rows.length === b.rows.length
     && a.rows.every((p, i) => p === b.rows[i])
   if (same) { identical++; continue }
@@ -171,7 +165,7 @@ for (const q of queries) {
 
 console.log(`identical: ${identical}/${queries.length}`)
 if (diffs.length === 0) {
-  console.log('RESULT: no behaviour change for any prefix-free query')
+  console.log('RESULT: no behaviour change for any separator-free query')
 } else {
   console.log(`RESULT: ${diffs.length} DIFFERENCES\n`)
   for (const d of diffs.slice(0, 10)) {

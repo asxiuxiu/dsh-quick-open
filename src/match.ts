@@ -272,9 +272,18 @@ export type PieceScope =
 export interface QueryPiece {
   text: string
   scope: PieceScope
+  /**
+   * The piece split on '/'. A path query matches each of these inside ONE path
+   * segment, which is what stops `login/index.html` from matching
+   * `.../black_curtain/index.html` by harvesting l-o-g-i-n from five different
+   * directories. Empty for pieces without a separator.
+   */
+  segments: string[]
 }
 
-/** A parsed query: the pieces, plus the raw normalized forms used for scoring. */
+/**
+ * A parsed query: the pieces, plus the raw normalized forms used for scoring.
+ */
 export interface PreparedQuery {
   pieces: QueryPiece[]
   /**
@@ -337,7 +346,11 @@ export function prepareQuery(raw: string): PreparedQuery {
     // way to `dir:ui` narrows nothing instead of emptying the result list.
     if (text === '') continue
     if (scope === 'dir') sawDirScope = true
-    pieces.push({ text, scope })
+    // Normalize '\' to '/' so a Windows-style path query splits the same way.
+    const segments = text.includes('/') || text.includes('\\')
+      ? text.split(/[\\/]+/u).filter(segment => segment !== '')
+      : []
+    pieces.push({ text, scope, segments })
   }
 
   return {
@@ -400,6 +413,21 @@ export function scoreEntry(
     }
 
     if (!pathQuery) return undefined
+
+    // A piece typed with separators (`login/index.html`) is matched SEGMENT BY
+    // SEGMENT, never as one subsequence over the flattened path. Matching the
+    // flattened path is what let `login` be harvested as l-o-g-i-n from five
+    // unrelated directories and rank `.../black_curtain/index.html` second.
+    if (piece.segments.length > 0) {
+      const anchored = matchPathSegments(piece, path, pathLower, nameStart, nameLength, scores, matches, positions)
+      if (anchored === undefined) return undefined
+      total += anchored.score
+      usedPath = true
+      if (anchored.hitDirectory) forcedDir = true
+      for (const position of anchored.positions) dirPositions.push(position)
+      for (const position of anchored.namePositions) namePositions.push(position)
+      continue
+    }
 
     if (piece.scope === 'dir') {
       // Score the directory PREFIX rather than the whole path. The piece must
@@ -492,4 +520,115 @@ function mergeSpans(spans: readonly MatchSpan[]): MatchSpan[] {
     else out.push({ start: span.start, end: span.end })
   }
   return out
+}
+
+/** The outcome of anchoring a separator-carrying query piece to path segments. */
+interface AnchoredMatch {
+  score: number
+  /** Matched positions in full-path coordinates, outside the basename. */
+  positions: number[]
+  /** Matched positions relative to the basename start. */
+  namePositions: number[]
+  /** Whether any directory segment was used. */
+  hitDirectory: boolean
+}
+
+/**
+ * Match a separator-carrying query piece (`login/index.html`) segment by
+ * segment.
+ *
+ * Each query segment must be found inside ONE path segment, in order and
+ * left to right, and the FINAL query segment must land on the basename (so
+ * `login/index.html` addresses an `index.html` inside a `login` directory
+ * rather than any file whose name merely contains those letters).
+ *
+ * Directory query segments must match CONTIGUOUSLY inside their path segment.
+ * That is deliberate: a directory is named by typing its name, so requiring
+ * `login` to appear literally keeps 27k scattered false positives out of a
+ * query that has only ~200 genuinely correct answers. The basename segment
+ * keeps fuzzy matching, so abbreviations still work for file names.
+ *
+ * Returns `undefined` when the piece cannot be anchored.
+ */
+function matchPathSegments(
+  piece: QueryPiece,
+  path: string,
+  pathLower: string,
+  nameStart: number,
+  nameLength: number,
+  scores: Int32Array,
+  matches: Int32Array,
+  positions: number[],
+): AnchoredMatch | undefined {
+  const querySegments = piece.segments
+  const lastIndex = querySegments.length - 1
+  const lastQuery = querySegments[lastIndex]
+  const nameTarget = path.slice(nameStart)
+  const nameTargetLower = pathLower.slice(nameStart)
+
+  // The final query segment targets the basename and must appear there
+  // CONTIGUOUSLY. Typing `client_module` after a directory names the file
+  // `client_module.*`; letting the letters scatter instead surfaces
+  // `chaos_client_boat_module_manager.lua`, which merely contains them.
+  // Contiguity here also keeps `game_scene/chaos_game_scene` to its one exact
+  // answer rather than nine loose ones.
+  if (nameTargetLower.indexOf(lastQuery) === -1) return undefined
+  const nameScore = scoreFuzzy(lastQuery, nameTarget, nameTargetLower, scores, matches, positions)
+  if (nameScore === 0) return undefined
+
+  const namePositions: number[] = []
+  for (const position of positions) namePositions.push(position)
+
+  let total = nameScore
+  let hitDirectory = false
+
+  if (lastIndex > 0) {
+    // Split the path's directory portion into segments, remembering each
+    // segment's offset so matched positions can be reported in path space.
+    const bounds: { start: number; end: number }[] = []
+    let segmentStart = 0
+    for (let i = 0; i < nameStart; i++) {
+      if (pathLower.charCodeAt(i) === 47) {
+        bounds.push({ start: segmentStart, end: i })
+        segmentStart = i + 1
+      }
+    }
+
+    const directoryPositions: number[] = []
+    // Greedily consume directory query segments left to right; each must be
+    // contained in some path segment at or after the previous one.
+    let searchFrom = 0
+    for (let qi = 0; qi < lastIndex; qi++) {
+      const querySegment = querySegments[qi]
+      if (querySegment === '') return undefined
+      let found = false
+      for (let si = searchFrom; si < bounds.length; si++) {
+        const bound = bounds[si]
+        const segmentLower = pathLower.slice(bound.start, bound.end)
+        const at = segmentLower.indexOf(querySegment)
+        if (at === -1) continue
+        const segmentScore = scoreFuzzy(
+          querySegment,
+          path.slice(bound.start, bound.end),
+          segmentLower,
+          scores,
+          matches,
+          positions,
+        )
+        if (segmentScore === 0) continue
+        total += segmentScore
+        for (const position of positions) directoryPositions.push(bound.start + position)
+        searchFrom = si + 1
+        hitDirectory = true
+        found = true
+        break
+      }
+      if (!found) return undefined
+    }
+    return { score: total, positions: directoryPositions, namePositions, hitDirectory }
+  }
+
+  // A bare file name typed with no directory part: nothing to anchor above.
+  if (nameLength === 0) return undefined
+  return { score: total, positions: [], namePositions, hitDirectory }
 }
