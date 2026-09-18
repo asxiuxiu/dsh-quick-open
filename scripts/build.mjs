@@ -36,6 +36,10 @@ await build({
 })
 
 // Browser half: factory-form CJS for window.__ModuleLoader__.
+//
+// Everything the client needs is bundled INLINE: the module loader that
+// mounts this factory serves one file per plugin id, so a dynamic `import()`
+// would emit a chunk the loader never fetches.
 await build({
   entryPoints: [join(root, 'src/client/index.tsx')],
   outfile: join(root, 'lib/client.js'),

@@ -15,13 +15,27 @@ import { createQuickOpenController } from './controller.ts'
 import { QuickOpenLayer } from './quick-open.tsx'
 import { QuickOpenSettings, quickOpenSettingsSection } from './settings.tsx'
 import { isImeComposition } from './ime-guard.ts'
+import { registerPreviewAugmentations } from './preview/index.ts'
 
-/** Services required before mounting (provided by the client runtime). */
+/**
+ * Services required before mounting.
+ *
+ * The quick-open layer needs `slots` (the overlay anchor) and `sessions`
+ * (the active cwd and the draft's session scope). File READING is no longer
+ * declared: the built-in document preview shows every file, and the
+ * augmentations decorate its DOM rather than reading files themselves.
+ */
 export const inject = ['slots', 'sessions']
 
 export function apply(ctx: Context): void {
   const store = createQuickOpenStore()
   const controller = createQuickOpenController(ctx, store)
+
+  // Decorate DSH's built-in document preview with an in-file find bar and
+  // the selection-to-conversation gesture. The stock preview keeps every
+  // file address — nothing is taken over — so its renderers (text, code,
+  // Markdown, HTML, PDF, images) and controls all stay in charge.
+  registerPreviewAugmentations(ctx)
 
   // Global Ctrl+P: window-level capture, active for the fiber's lifetime.
   // Without a current session the key is NOT swallowed (the overlay slot

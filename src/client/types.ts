@@ -31,6 +31,17 @@ export interface SlotEntry {
   id?: string
   order?: number
   label?: string
+  /** The kind a keyed slot body is registered under (the tab registry routes by it). */
+  key?: string
+  locale?: string
+  /**
+   * Props factory: its RETURN VALUE becomes the registered component's props.
+   * The pane renders a tab body with an EMPTY custom-props argument, so this is
+   * the only channel through which a slot body receives plugin-owned values —
+   * the client context included. Anything not returned here is `undefined` in
+   * the component.
+   */
+  inject?: (...args: unknown[]) => Record<string, unknown>
 }
 
 export interface SlotsService {
@@ -78,11 +89,31 @@ export interface SidebarRightServiceLike {
   openResource(address: string, options?: SidebarRightOpenOptions): void
 }
 
+/**
+ * The native right Sidebar's tab registry (`ctx.sidebarRightTabs`).
+ *
+ * Its bands are ranked `extension` (3) > `builtin` (2) > `fallback` (1), and
+ * an `extension` may take over a kind a `builtin` already holds — which is
+ * how the file viewer replaces the stock document preview without patching
+ * any DSH package.
+ */
+export interface SidebarRightTabRegistryLike {
+  register(definition: {
+    id: string
+    kind: string
+    patterns?: readonly string[]
+    priority?: 'extension' | 'builtin' | 'fallback'
+    canOpen?: (address: string) => boolean
+    title?: (address: string) => string
+  }): () => void
+}
+
 /** The client cordis context, narrowed to the members this plugin uses. */
 export interface Context {
   slots: SlotsService
   sessions: SessionsService
   get(name: 'sidebarRight'): SidebarRightServiceLike | undefined
+  get(name: 'sidebarRightTabs'): SidebarRightTabRegistryLike | undefined
   get(name: 'conversation'): ConversationService | undefined
   get(name: string): unknown
   effect(body: () => (() => void) | void, label?: string): void

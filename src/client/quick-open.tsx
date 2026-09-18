@@ -1,6 +1,17 @@
 /**
- * The quick-open floating layer, rendered into the official
- * `conversation.input.overlay` slot (the input bar's overlay anchor).
+ * The quick-open floating layer, mounted through the official
+ * `conversation.input.overlay` slot (the input bar's overlay anchor) and
+ * PORTALED to `document.body`.
+ *
+ * The portal is load-bearing, not cosmetic: the slot sits inside the composer
+ * card, and any ancestor that establishes a containing block or stacking
+ * context (a transform, paint containment, a clipped scroller) would trap the
+ * fixed backdrop inside the conversation column — capping its effective
+ * z-index below the sidebar's own layers (panel 10/40, float host 60) and
+ * clipping it to the column. Portaling to the body escapes every ancestor
+ * context, so the backdrop competes only at the root, where nothing in the
+ * app exceeds its z-index. The sidebar's own float layer uses the same
+ * pattern for the same reason.
  *
  * Interaction model (VSCode quick-open discipline):
  * - KEYBOARD FOCUS NEVER LEAVES THE INPUT while the layer is open. Row
@@ -19,6 +30,7 @@
  * dark quick-open.
  */
 import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { createPortal } from 'react-dom'
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import type { QuickOpenController } from './controller.ts'
 import type { MatchSpan } from './store.ts'
@@ -460,7 +472,7 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
     )
   }
 
-  return (
+  return createPortal(
     <div style={styles.backdrop} onMouseDown={onBackdropMouseDown}>
       <div
         style={styles.panel}
@@ -491,6 +503,7 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
           {state.indexInfo !== null && <span style={{ marginLeft: 'auto' }}>{state.indexInfo}</span>}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { Context, SessionScope } from './types.ts'
+import { readSelectionFormat, writeSelectionFormat, type SelectionFormat } from './preview/selection.ts'
 
 /** One list editor row group: a labelled textarea of newline-separated patterns. */
 const styles: Record<string, CSSProperties> = {
@@ -80,6 +81,17 @@ const styles: Record<string, CSSProperties> = {
   textareaReadonly: {
     background: '#2d2d2d',
     color: '#8a8a8a',
+  },
+  select: {
+    width: '100%',
+    boxSizing: 'border-box',
+    padding: '6px 8px',
+    fontSize: 12,
+    color: '#cccccc',
+    background: '#3c3c3c',
+    border: '1px solid #555555',
+    borderRadius: 4,
+    outline: 'none',
   },
   row: {
     display: 'flex',
@@ -202,6 +214,9 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // The viewer preference is app-wide (not a workspace index rule), so it is
+  // stored beside the recents rather than in the workspace config file.
+  const [selectionFormat, setSelectionFormat] = useState<SelectionFormat>(() => readSelectionFormat())
 
   // Follow the active session: switching conversations must switch the
   // workspace shown (and the file edited).
@@ -277,6 +292,34 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
 
   const readOnly = !hasWorkspace || loading
 
+  // The viewer preference is app-wide, so it renders even without a workspace
+  // to edit — there is nothing workspace-scoped about it.
+  const viewerSection = (
+    <div style={styles.field}>
+      <div style={styles.label}>文件查看器：选中文本加入会话的格式</div>
+      <select
+        style={styles.select}
+        value={selectionFormat}
+        onChange={(event) => {
+          const next = event.target.value as SelectionFormat
+          setSelectionFormat(next)
+          writeSelectionFormat(next)
+        }}
+      >
+        <option value="path">仅位置：@path/file.cpp:12-15</option>
+        <option value="path-hint">位置 + 提示模型去读取该段</option>
+        <option value="content">位置 + 围栏代码块（带上选中内容）</option>
+      </select>
+      <div style={styles.hint}>
+        在侧边栏文件里选中文本后点「加入会话」时插入的内容。
+        <br />
+        <strong>仅位置</strong>最省上下文，模型自行读取所需范围；
+        <strong>位置 + 提示</strong>多一句「请用 read 读取该段」，能减少模型忽略行号的情况；
+        <strong>围栏代码块</strong>把选中内容一并带入，代价是每轮都重复这段代码。
+      </div>
+    </div>
+  )
+
   if (!hasWorkspace) {
     return (
       <div style={styles.root}>
@@ -286,6 +329,7 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
           索引规则按工作区存放（<code>.dsh/quick-open.json</code> 位于工作区根目录下），
           请先打开一个会话再回到此面板。
         </div>
+        {viewerSection}
       </div>
     )
   }
@@ -303,6 +347,8 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
           已索引 <strong>{indexedEntries.toLocaleString()}</strong> 项
         </div>
       </div>
+
+      {viewerSection}
 
       <div style={styles.field}>
         <div style={styles.label}>排除目录 excludeDirs</div>

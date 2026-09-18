@@ -15,6 +15,40 @@ DSH Web GUI 插件：VSCode 式 `Ctrl+P` 快速打开，**索引级搜索性能 
 - footer 显示索引透明度信息（条目数与新鲜度）
 - **每工作区可配置索引规则**（设置页编辑，见下）：排除目录 / 强制包含目录 / 后缀白名单 / 文件名白名单 / 是否索引目录
 - **可索引工作区之外的目录**（`extraRoots`）：引擎仓库与游戏仓库是并列文件夹，开发时需要互查
+- **自带文件查看器**（见下）：接管侧边栏的文件预览，提供文件内查找与「选中加入会话」
+
+## 文件查看器
+
+本插件同时接管 DSH 侧边栏的**文件预览**，所以打开文件由它渲染：
+
+- **文件内查找**：`Ctrl/Cmd+F` 打开查找卡片（与 `Ctrl+P` 同一套配色与圆角），回车 / `Shift+回车` 前后跳转，`Alt+G` 跳行，`Esc` 关闭
+- **选中即引用**：在文件里选中一段文本，点「加入会话」，插入 `@相对路径:起止行`
+- 语法高亮：C/C++、Lua、JSON/`.ast`、XML、SQL、Go、Python、JS/TS、Markdown、YAML、sh/bat、PowerShell、proto、TOML、CMake、diff
+- 只读（不改文件）；行号、自动换行开关、明暗主题跟随、按 `line` 参数定位打开
+
+`.md` / `.html` / `.pdf` / 图片等**内置预览能真正渲染**的文件，标题栏会多一个「预览」按钮，把当前 tab 交还给内置渲染器（同 tab 替换，不会多开一个）。代码文件不显示该按钮——内置预览对代码只是无高亮的纯文本，比本查看器更差。
+
+> 这个按钮是必需的：本查看器以 `extension` 带接管了**所有**文件地址，也就一并接管了原本由内置渲染器处理的 Markdown/HTML/PDF。不做交还入口，`.md` 就只能看源码了。
+
+接管机制用的是注册表公开的**跨 kind 排名**，而不是顶替内置的 kind：本插件以自己的 kind（`dsh-quick-open:file`）注册、声明与内置预览相同的地址 pattern、使用 `extension` 优先级带。地址归属由排名决定（`extension` 3 > `builtin` 2 > `fallback` 1），内置预览用的是 `fallback`，因此本插件必然胜出，**不依赖插件加载顺序**。
+
+> 交还时**必须显式指定 `kind: 'text'`**：注册表只在未指定 kind 时才按排名挑，而本插件排名更高——不指定就会原地重开成自己。注册表的 `claim(address, kind)` 明确写了「点名 type 即是决定」，交还正是走这条路。
+
+> **为什么不用内置的 `text` kind**：该 kind 被内置预览以 `fallback` 占住，而注册表的 `coexists` 规定「`fallback` 不与其他任何注册共享 kind」。撞上去会抛异常，且因为注册发生在 `apply()` 阶段，异常会连带把**内置包**的挂载打掉——实测会让整个 DSH 启动失败。自有 kind 完全避开这个冲突，**没有改动任何 DSH 包**，内置预览仍注册在底层，卸载本插件即恢复。
+
+### 引用格式（可配置）
+
+设置页「Quick Open 索引 → 文件查看器」三选一：
+
+| 格式 | 插入内容 | 取舍 |
+|---|---|---|
+| **仅位置**（默认） | `@path/file.cpp:12-15` | 最省上下文，模型自行读取所需范围 |
+| 位置 + 提示 | 同上 +「请用 read 工具读取该文件的这一段」 | 多几个 token，减少模型忽略行号 |
+| 围栏代码块 | 位置 + 选中内容 | 自包含，代价是每轮重复这段代码 |
+
+偏好存 `localStorage`（应用级，与工作区索引规则分开）。
+
+> **包体积**：查看器内联 CodeMirror 与各语言语法树，`lib/client.js` 约 1.4MB。DSH 的模块加载器一个插件只服务一个文件，因此动态 import 无法拆成独立 chunk——语法包只能内联，这是取舍后的结果。
 
 ## 搜索匹配
 
@@ -199,6 +233,8 @@ node scripts/verify.mjs                  # 匹配质量回归（含 dir:/file: �
 node scripts/verify-no-regression.mjs    # 对比 HEAD 与当前：证明不含分隔符的查询行为未变
 node scripts/verify-grammar.mjs          # dir:/file: 前缀解析边界用例
 node --experimental-strip-types scripts/verify-file-address.mjs   # 文件地址 + @ 引用拼写
+node --experimental-strip-types scripts/verify-viewer.mjs         # 查看器：地址解析 + 三种引用格式
+node scripts/verify-client-bundle.mjs    # 加载构建产物：证明 bundle 能挂载且注册正确
 node --expose-gc scripts/eval-cost.mjs   # 索引体积基线 + 候选结构代价
 node scripts/eval-ambiguity.mjs          # 目录名歧义量化
 ```
@@ -211,13 +247,20 @@ src/match.ts            模糊匹配器：VSCode quick-open 打分器移植（�
                         含查询解析：dir: / file: 作用域前缀（纯解析层，不带前缀时行为与之前逐字节一致）
 src/index.ts            host 半：/quick-open/api/{search,probe,config.get,config.set,config.reset}
                         （规则驱动的并行建索引、SWIG 式模糊查询、SWR 保鲜、配置文件热重验、原子写入、trust fence、isDir 标记）
-src/client/index.tsx    client 入口：全局 Ctrl+P（ctx.effect + window capture）+ 两个 slot 注册
+src/client/index.tsx    client 入口：全局 Ctrl+P（ctx.effect + window capture）+ 查看器注册 + 两个 slot
 src/client/controller.ts 搜索管线（查询缓存/索引路由）、文件地址构造、打开、引用、最近记录、焦点回收
 src/client/quick-open.tsx 浮层组件（内联样式，多段高亮，无 CSS 构建链）
-src/client/settings.tsx 设置面板：当前工作区规则编辑（无会话时只读降级）
+src/client/settings.tsx 设置面板：工作区索引规则 + 查看器引用格式（无会话时索引部分只读降级）
 src/client/store.ts     每激活一份的状态存储（useSyncExternalStore）
 src/client/ime-guard.ts IME 组词判据（isComposing + keyCode 229，DSH core 约定）
-src/client/types.ts     最小服务契约类型（slots / sessions / conversation / sidebarRight）
+src/client/types.ts     最小服务契约类型（slots / sessions / conversation / sidebarRight / sidebarRightTabs）
+src/client/viewer/index.tsx       以自有 kind + extension 带注册，与内置预览同 pattern 竞争
+src/client/viewer/FileViewer.tsx  查看器主体：读取、装配、选区引用、换行与滚动记忆、交还内置预览
+src/client/viewer/cm-setup.ts     CodeMirror 扩展装配（含 searchKeymap 查找）
+src/client/viewer/cm-language.ts  后缀 → 语法（按本仓库实际文件类型选取，全部内联）
+src/client/viewer/cm-theme.ts     编辑器主题 + token 配色 + 查找卡片（对齐 Ctrl+P 配色）
+src/client/viewer/read.ts         文件地址解析 + 经 Remote 读取（含二进制降级）
+src/client/viewer/selection.ts    引用格式与草稿注入（三种格式共用）
 docs/matching-research.md 匹配方案调研：VSCode/fzf/fzy 源码结论 + 8 种设计的实测对比与负结果
 docs/dir-filter-evaluation.md 目录筛选可行性评估：索引体积实测 + 目录名歧义量化（结论：不做自动筛选）
 docs/better-sidebar-integration.md 侧边栏集成调研：文件打开/引用的通道与备选方案
@@ -227,12 +270,11 @@ docs/better-sidebar-integration.md 侧边栏集成调研：文件打开/引用�
 
 按「价值 / 成本」排序：
 
-1. **文件预览窗格**：导航时右侧显示选中文件的前 N 行（`fs.read` 路由已有，需处理二进制与大文件）——类 VSCode peek
-2. **拼音/首字母匹配**：中文文件名用拼音检索（索引已在内存，客户端加分词映射即可，成本中等）
-3. **多选批量引用**：`Ctrl+Space` 标记多行，一次 `Ctrl+Enter` 全部加入对话
-4. **`fs.watch` 精准失效**：替代/补充 TTL，索引实时跟随文件变更（Windows 支持递归 watch，Linux 需逐目录——跨平台取舍）
-5. **设置页扩展**：自定义键位、防抖时长、最近记录上限（`settings.section` slot 已就位，当前用于索引规则）
-6. **全文搜索模式**：`%query` 前缀切换内容检索（索引已就位，加内容扫描路由即可）
-7. **`dir:` 查询提速**：目前 22–48ms（需按路径打分）。可用索引期预计算的目录段倒排索引把候选直接切出来，代价 +4.3MB（占总索引 ~23MB 的 19%），见 `docs/dir-filter-evaluation.md`
-8. **索引截断提示**：walk 触及 `MAX_VISITED`（50 万）时向客户端上报 `indexTruncated`，浮层 footer 显式告警（host 半已在响应中返回该字段，待客户端消费）
+1. **查看器编辑/保存**：当前只读。加写入需要 DSH 侧栏的写契约（`fs.write` 已有，但打开路径尚无保存语义），并要处理脏标记与外部改动冲突
+2. **全文搜索模式**：`%query` 前缀切换内容检索（索引已就位，加内容扫描路由即可）
+3. **拼音/首字母匹配**：中文文件名用拼音检索（索引已在内存，客户端加分词映射即可，成本中等）
+4. **多选批量引用**：`Ctrl+Space` 标记多行，一次加入会话
+5. **`fs.watch` 精准失效**：替代/补充 TTL，索引实时跟随文件变更（Windows 支持递归 watch，Linux 需逐目录——跨平台取舍）
+6. **`dir:` 查询提速**：目前 22–48ms（需按路径打分）。可用索引期预计算的目录段倒排索引把候选直接切出来，代价 +4.3MB（占总索引 ~23MB 的 19%），见 `docs/dir-filter-evaluation.md`
+7. **索引截断提示**：walk 触及 `MAX_VISITED`（50 万）时向客户端上报 `indexTruncated`，浮层 footer 显式告警（host 半已在响应中返回该字段，待客户端消费）
 
