@@ -184,6 +184,18 @@ function scoreFuzzy(
     }
   }
 
+  // Walk back from the bottom-right corner, taking every cell whose own
+  // diagonal won. A cell that merely inherited a left-neighbour score has
+  // `matches === 0`, so stepping left over zeros recovers exactly the
+  // alignment the score was computed from.
+  //
+  // This is VSCode's `doScoreFuzzy` recovery loop. Note it can legitimately
+  // emit widely scattered positions — for `cpp` against
+  // `chaos_client_camera_effect_manager.cpp` it returns `[0, 36, 37]`, because
+  // `chaos` really is the only `c` — and that is correct: the score of 20 is
+  // exactly `c@0 + p@36 + p@37`. A scattered span is a truthful rendering of a
+  // scattered match, not a bug in the walk. What WAS a bug is span handling
+  // downstream; see `toSpans`.
   let queryIndex = queryLength - 1
   let targetIndex = targetLength - 1
   while (queryIndex >= 0 && targetIndex >= 0) {
@@ -270,13 +282,27 @@ export function isSubsequence(needle: string, hay: string): boolean {
   return true
 }
 
-/** Merge ascending positions into half-open spans. */
+/**
+ * Merge ascending positions into half-open spans.
+ *
+ * Positions come from EVERY query piece, pushed into one array and sorted, so
+ * the same character can appear more than once: `camera manager cpp` scores
+ * three pieces independently, and both `camera` and `cpp` match the `c` of
+ * `chaos_client_...`, each contributing position 0. Handling only the
+ * strictly-adjacent case (`last.end === position`) turned that pair into two
+ * identical `{0,1}` spans, which React renders as the same letter highlighted
+ * twice — the visible symptom being a doubled character in the row.
+ *
+ * So a position is folded into the previous span when it is adjacent OR when it
+ * is already covered by it; only a genuinely later position opens a new span.
+ */
 function toSpans(positions: readonly number[], offset: number): MatchSpan[] {
   const spans: MatchSpan[] = []
   for (const position of positions) {
+    const at = position + offset
     const last = spans[spans.length - 1]
-    if (last !== undefined && last.end === position + offset) last.end = position + offset + 1
-    else spans.push({ start: position + offset, end: position + offset + 1 })
+    if (last !== undefined && at <= last.end) last.end = Math.max(last.end, at + 1)
+    else spans.push({ start: at, end: at + 1 })
   }
   return spans
 }
