@@ -16,6 +16,15 @@ import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { Context, SessionScope } from './types.ts'
 import { readSelectionFormat, writeSelectionFormat, type SelectionFormat } from './preview/selection.ts'
+import {
+  DEFAULT_SHORTCUT,
+  describeShortcut,
+  isMacPlatform,
+  readShortcut,
+  shortcutFromEvent,
+  writeShortcut,
+  type Shortcut,
+} from './shortcut.ts'
 
 /** One list editor row group: a labelled textarea of newline-separated patterns. */
 const styles: Record<string, CSSProperties> = {
@@ -129,6 +138,11 @@ const styles: Record<string, CSSProperties> = {
     opacity: 0.45,
     cursor: 'default',
   },
+  buttonRecording: {
+    background: '#7a3d0e',
+    outline: '1px dashed #d7a05a',
+    outlineOffset: 1,
+  },
   status: {
     fontSize: 12,
     color: '#9a9a9a',
@@ -217,6 +231,45 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
   // The viewer preference is app-wide (not a workspace index rule), so it is
   // stored beside the recents rather than in the workspace config file.
   const [selectionFormat, setSelectionFormat] = useState<SelectionFormat>(() => readSelectionFormat())
+  // The quick-open shortcut, app-wide for the same reason.
+  const [shortcut, setShortcut] = useState<Shortcut>(() => readShortcut())
+  /** True while the button is capturing the next key combination. */
+  const [recording, setRecording] = useState(false)
+  const [shortcutError, setShortcutError] = useState<string | null>(null)
+
+  /**
+   * Capture the next combination while recording.
+   *
+   * `stopPropagation` matters: without it a recorded combination would also
+   * reach the app underneath, so binding `Ctrl+K` would both set the shortcut
+   * and trigger whatever else listens for it.
+   */
+  const onRecorderKeyDown = useCallback((event: React.KeyboardEvent) => {
+    if (!recording) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.key === 'Escape') {
+      setRecording(false)
+      setShortcutError(null)
+      return
+    }
+    const next = shortcutFromEvent(event.nativeEvent)
+    if (typeof next === 'string') {
+      setShortcutError(next)
+      return
+    }
+    setShortcutError(null)
+    setShortcut(next)
+    writeShortcut(next)
+    setRecording(false)
+  }, [recording])
+
+  const resetShortcut = useCallback(() => {
+    setShortcut(DEFAULT_SHORTCUT)
+    writeShortcut(DEFAULT_SHORTCUT)
+    setShortcutError(null)
+    setRecording(false)
+  }, [])
 
   // Follow the active session: switching conversations must switch the
   // workspace shown (and the file edited).
@@ -320,6 +373,52 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
     </div>
   )
 
+  // The shortcut is app-wide too: it belongs to the user's habits, not to a
+  // workspace. It renders in both branches for the same reason the viewer
+  // preference does.
+  const shortcutSection = (
+    <div style={styles.field}>
+      <div style={styles.label}>呼出快速打开面板的快捷键</div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <button
+          type="button"
+          style={{ ...styles.button, ...(recording ? styles.buttonRecording : {}) }}
+          onClick={() => setRecording(true)}
+          onBlur={() => setRecording(false)}
+          onKeyDown={onRecorderKeyDown}
+        >
+          {recording
+            ? '按下新的快捷键…（Esc 取消）'
+            : describeShortcut(shortcut, isMacPlatform())}
+        </button>
+        <button
+          type="button"
+          style={styles.button}
+          onClick={resetShortcut}
+          disabled={recording}
+        >
+          恢复默认
+        </button>
+      </div>
+      <div style={styles.hint}>
+        点上面的按钮再按一次新的组合键即可（必须带修饰键）。
+        <br />
+        默认：
+        <strong>{describeShortcut(DEFAULT_SHORTCUT, isMacPlatform())}</strong>
+        ，其中 {isMacPlatform() ? 'Cmd' : 'Ctrl'} 是
+        {isMacPlatform() ? 'macOS' : '本平台'}的主修饰键——同一份配置换到
+        {isMacPlatform() ? ' Windows 会按 Ctrl' : ' macOS 会按 Cmd'} 解释，
+        所以跨平台的习惯都能对上。
+        {shortcutError !== null && (
+          <>
+            <br />
+            <span style={{ color: '#e6a0a0' }}>{shortcutError}</span>
+          </>
+        )}
+      </div>
+    </div>
+  )
+
   if (!hasWorkspace) {
     return (
       <div style={styles.root}>
@@ -330,6 +429,7 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
           请先打开一个会话再回到此面板。
         </div>
         {viewerSection}
+        {shortcutSection}
       </div>
     )
   }
@@ -349,6 +449,8 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
       </div>
 
       {viewerSection}
+
+      {shortcutSection}
 
       <div style={styles.field}>
         <div style={styles.label}>排除目录 excludeDirs</div>
@@ -419,7 +521,7 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
             checked={rules.includeDirectories}
             onChange={event => setRules(prev => ({ ...prev, includeDirectories: event.target.checked }))}
           />
-          <span>索引目录条目（关闭后无法用 Ctrl+P 引用 <code>@dir/</code>）</span>
+          <span>索引目录条目（关闭后无法在快速打开面板里引用 <code>@dir/</code>）</span>
         </label>
       </div>
 

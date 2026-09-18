@@ -41,7 +41,19 @@
 
 - 匹配字符逐段高亮；深路径的目录部分**前置省略**，永远保住区分结果的那段
 - 每工作区索引规则可配（设置页）：排除目录、强制包含生成目录、后缀白名单、是否索引目录
+- **呼出快捷键可自定义**（设置页）：默认 `Ctrl+P`（macOS 上按 `Cmd+P`），改成什么组合都行
 - footer 常驻索引透明度（条目数 · 新鲜度）与键位提示
+
+#### ⌨️ 呼出快捷键可自定义
+
+默认 `Ctrl+P`，**macOS 上默认 `Cmd+P`**。想换成别的组合（`Ctrl+K`、`Ctrl+Shift+O`…）到设置页点一下录制按钮，按一次新组合即可，**立即生效不用刷新**。
+
+两点设计：
+
+- **跨平台按各自习惯解释**。设置里存的是"主修饰键"而不是写死的 Ctrl 或 Cmd，所以同一份配置在 macOS 上按 Cmd、在 Windows 上按 Ctrl——两边都符合本机习惯，不用分别配。
+- **必须带修饰键**。不接受裸键绑定（否则打字就会弹出面板），录制时会直接拒绝并说明原因。
+
+> ⚠️ **macOS 用户注意**：早期版本接受 `Ctrl+P` 或 `Cmd+P` 两种按法，现在默认**只认 `Cmd+P`**。如果您习惯按 `Ctrl+P`，到设置页把主修饰键那档重新录一次即可（或直接接受 `Cmd+P`，它才是 macOS 的标准）。
 
 #### 🎯 `dir:` 与 `file:` —— 限定这段文字该匹配哪里
 
@@ -169,13 +181,14 @@ node scripts/eval-ambiguity.mjs          # 目录名歧义量化
 ```
 src/rules.ts            索引规则：目录匹配（子树语义 + **/ glob）/ 文件过滤 / 配置解析
 src/match.ts            VSCode 打分器移植 + dir:/file: 作用域前缀解析
-src/index.ts            host 半：/quick-open/api/{search,probe,config.get,config.set,config.reset}
-src/client/index.tsx    client 入口：全局 Ctrl+P + 预览增强挂载 + slot 注册
-src/client/controller.ts 搜索管线（查询缓存/索引路由）、:行号 解析、打开、引用、最近记录
+src/index.ts            host 半：/quick-open/api/{search,children,probe,config.get,config.set,config.reset}
+src/client/index.tsx    client 入口：全局快捷键监听 + 预览增强挂载 + slot 注册
+src/client/controller.ts 搜索管线（查询缓存/索引路由/目录下钻）、:行号 解析、打开、引用、最近记录
 src/client/quick-open.tsx 浮层组件（portal 到 body，z-index 10000，多段高亮）
-src/client/settings.tsx 设置面板：索引规则 + 引用格式
+src/client/settings.tsx 设置面板：索引规则 + 引用格式 + 呼出快捷键录制
+src/client/shortcut.ts  快捷键：跨平台主修饰键映射、匹配、录制、校验、持久化
 src/client/preview/     预览增强：查找条（Highlight API）+ 选中浮框 + DOM 探测（全部优雅降级）
-docs/                   匹配调研、目录筛选评估、侧边栏集成调研（含大量实测数据与负结果）
+docs/                   匹配调研、目录筛选评估、侧边栏集成调研、架构说明（含大量实测数据与负结果）
 ```
 
 ## 路线图

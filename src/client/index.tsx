@@ -15,6 +15,7 @@ import { createQuickOpenController } from './controller.ts'
 import { QuickOpenLayer } from './quick-open.tsx'
 import { QuickOpenSettings, quickOpenSettingsSection } from './settings.tsx'
 import { isImeComposition } from './ime-guard.ts'
+import { matchesShortcut, readShortcut } from './shortcut.ts'
 import { registerPreviewAugmentations } from './preview/index.ts'
 
 /**
@@ -39,14 +40,17 @@ export function apply(ctx: Context): void {
   // the modal on top.
   registerPreviewAugmentations(ctx, () => controller.store.getSnapshot().open)
 
-  // Global Ctrl+P: window-level capture, active for the fiber's lifetime.
-  // Without a current session the key is NOT swallowed (the overlay slot
-  // cannot render then anyway), letting the browser default pass through.
+  // Global quick-open shortcut: window-level capture, active for the fiber's
+  // lifetime. Without a current session the key is NOT swallowed (the overlay
+  // slot cannot render then anyway), letting the browser default pass through.
+  //
+  // The binding is READ PER KEYPRESS rather than captured once, so changing it
+  // in the settings panel takes effect immediately — no reload, and no stale
+  // listener holding the old combination.
   ctx.effect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (isImeComposition(event)) return
-      if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) return
-      if (event.key !== 'p' && event.key !== 'P') return
+      if (!matchesShortcut(readShortcut(), event)) return
       if (!controller.canServe()) return
       event.preventDefault()
       event.stopPropagation()
@@ -54,7 +58,7 @@ export function apply(ctx: Context): void {
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, 'dsh-quick-open: global Ctrl+P listener')
+  }, 'dsh-quick-open: global quick-open listener')
 
   // Tab is claimed at window CAPTURE while the layer is open.
   //

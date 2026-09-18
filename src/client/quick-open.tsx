@@ -35,6 +35,7 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent as 
 import type { QuickOpenController } from './controller.ts'
 import type { MatchSpan } from './store.ts'
 import { isImeComposition } from './ime-guard.ts'
+import { describeShortcut, readShortcut } from './shortcut.ts'
 
 const styles: Record<string, CSSProperties> = {
   backdrop: {
@@ -282,6 +283,10 @@ const PAGE_STEP = 10
 
 export function QuickOpenLayer({ controller }: { controller: QuickOpenController }) {
   const state = useSyncExternalStore(controller.store.subscribe, controller.store.getSnapshot)
+  // Read per render so the footer names whatever is bound right now. The layer
+  // re-renders on every open, so a shortcut changed in the settings panel shows
+  // up the next time the palette appears — no subscription needed for a label.
+  const boundShortcut = readShortcut()
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const wasOpenRef = useRef(false)
@@ -505,6 +510,10 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
           <span>dir: 限定目录</span>
           <span>file: 限定文件名</span>
           <span>Esc 关闭</span>
+          {/* The bound combination, not a hardcoded one: the shortcut is
+              customizable, so a fixed label would be wrong the moment the user
+              changes it. */}
+          <span>{describeShortcut(boundShortcut)} 开关</span>
           {state.truncated && <span>结果已截断，请细化关键词</span>}
           {state.indexInfo !== null && <span style={{ marginLeft: 'auto' }}>{state.indexInfo}</span>}
         </div>
