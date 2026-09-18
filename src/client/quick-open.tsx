@@ -352,7 +352,7 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
           ref={inputRef}
           style={styles.input}
           value={state.query}
-          placeholder="模糊搜索文件名；空格分隔多个关键词（如 index.html ui）"
+          placeholder="模糊搜索文件名；空格分词，dir: 前缀限定目录（如 dir:ui index.html）"
           spellCheck={false}
           onChange={(event) => controller.setQuery(event.target.value)}
         />
@@ -364,7 +364,8 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
           <span>Enter 打开</span>
           <span>Ctrl+Enter 加入对话（不关闭）</span>
           <span>空格分词</span>
-          <span>带 / 时匹配路径</span>
+          <span>dir: 限定目录</span>
+          <span>file: 限定文件名</span>
           <span>Esc 关闭</span>
           {state.truncated && <span>结果已截断，请细化关键词</span>}
           {state.indexInfo !== null && <span style={{ marginLeft: 'auto' }}>{state.indexInfo}</span>}

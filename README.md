@@ -27,11 +27,31 @@ DSH Web GUI 插件：VSCode 式 `Ctrl+P` 快速打开，**索引级搜索性能 
 | 字符命中 | `+1`；连续命中 `min(run,3)*6 + max(0,run-3)*3`；大小写也相同 `+1` |
 | 词首加成 | 位置 0 `+8`；前一位是 `/` 或 `\` `+5`；前一位是 `_ - . 空格 ' " :` `+4`；词内驼峰（非连续时）`+2` |
 | 顺序约束 | 非首字符必须有对角分才计分，保证查询字符按序匹配 |
-| 分档 | 全路径相同 `1<<18` > 文件名前缀 `1<<17` > 命中文件名 `1<<16` > 仅命中目录 `1<<14` |
+| 分档 | 全路径相同 `1<<18` > 文件名前缀 `1<<17` > 命中文件名 `1<<16` > `dir:` 命中目录 `1<<15` > 仅命中目录 `1<<14` |
 | 平局 | 命中越紧凑优先（跨度过大者降级），再由路径长度兜底——保证结果顺序稳定 |
 | 门槛 | 查询片必须是目标的子序列才进入矩阵打分（保守预筛，不会漏掉真实命中） |
 
-**已知边界**：`index.html ui` 这种「无分隔符、想让 `ui` 去匹配目录段」的写法**不保证**把 `ui/` 目录的结果排到最前——`ui` 本身就是 `..._observer_index.html` 的合法子序列，算法无法知道你想指的是目录。要按目录筛选请**带上 `/`**（`ui/index.html`），这与 VSCode 行为一致。
+### 作用域前缀：`dir:` / `file:`
+
+每个空格分隔的词都可以带前缀，限定它只能在哪里匹配：
+
+| 写法 | 含义 |
+|---|---|
+| `dir:ui index.html` | `ui` **必须**命中目录段，`index.html` 命中文件名 |
+| `d:ui index.html` | 同上（简写） |
+| `file:index.html` | 只匹配文件名，不回落到路径 |
+| `f:index.html` | 同上（简写） |
+| `ui/index.html` | 带 `/` 等价于路径查询（VSCode 行为） |
+
+解决的就是下面「已知边界」里那个问题——**用显式前缀代替自动猜测**。
+
+- **零索引体积**：纯查询解析，不新增任何索引结构
+- **零默认行为改动**：不带前缀时逐字节等价于原行为（有 44 条查询的对比测试证明，见 `scripts/verify-no-regression.mjs`）
+- 前缀只在**词首**识别；`e:foo`（Windows 盘符）、`a:bc` 这类含冒号的词按字面处理
+- 半成品前缀（如刚敲下 `dir:`）不产生约束，不会把结果清空
+- 代价：`dir:` 查询要按路径打分，实测 22–48ms（普通查询 ~7ms）。这是显式高级查询，可接受
+
+**已知边界**：`index.html ui` 这种「无分隔符、想让 `ui` 去匹配目录段」的写法**不保证**把 `ui/` 目录的结果排到最前——`ui` 本身就是 `..._observer_index.html` 的合法子序列，算法无法知道你想指的是目录。请改用 `dir:ui index.html`，或带上 `/`（`ui/index.html`）。
 
 > 该边界已做过完整可行性评估（体积 + 准确率实测），结论是**不做自动目录筛选**：机制能让 `index.html bag` 从 0 结果变正确，但会把 `game_scene lua`、`client module`、`material ast` 三个原本正确的查询劫持到错误结果。根因是 `lua`/`module`/`ast` 这类词**既是真实目录名又是常见文件名片段**——2,801 个目录名里只有 3 个不出现在任何 basename 中（`module` 有 4 个目录却出现在 539 个 basename 里），不存在可用的判定阈值。数据与各结构体积对比见 `docs/dir-filter-evaluation.md`。
 
@@ -154,9 +174,13 @@ dsh plugin --profile web add link:D:/dev/dsh-quick-open   # 本地开发
 npm install
 npm run build       # 产出 lib/index.js（host：索引搜索路由）+ lib/client.js（__ModuleLoader__ 封装）
 npm run typecheck
-node scripts/verify.mjs            # 用真实工作区索引跑匹配回归（需先按脚本内路径配置工作区）
-node --expose-gc scripts/eval-cost.mjs     # 索引体积基线 + 候选结构代价
-node scripts/eval-ambiguity.mjs            # 目录名歧义量化
+
+# 验证脚本（均针对真实工作区索引，需先按脚本内路径配置工作区）
+node scripts/verify.mjs                  # 匹配质量回归（含 dir:/file: 用例）
+node scripts/verify-no-regression.mjs    # 对比 HEAD 与当前：证明无前缀查询行为未变
+node scripts/verify-grammar.mjs          # dir:/file: 前缀解析边界用例
+node --expose-gc scripts/eval-cost.mjs   # 索引体积基线 + 候选结构代价
+node scripts/eval-ambiguity.mjs          # 目录名歧义量化
 ```
 
 ## 架构
@@ -164,6 +188,7 @@ node scripts/eval-ambiguity.mjs            # 目录名歧义量化
 ```
 src/rules.ts            索引规则：类型/默认规则/目录匹配（子树语义 + **/ glob）/文件过滤/配置解析与序列化
 src/match.ts            模糊匹配器：VSCode quick-open 打分器移植（分档/字符分/顺序约束/紧凑度平局/高亮区间）
+                        含查询解析：dir: / file: 作用域前缀（纯解析层，不带前缀时行为与之前逐字节一致）
 src/index.ts            host 半：/quick-open/api/{search,config.get,config.set,config.reset}
                         （规则驱动的并行建索引、SWIG 式模糊查询、SWR 保鲜、配置文件热重验、原子写入、trust fence、isDir 标记）
 src/client/index.tsx    client 入口：全局 Ctrl+P（ctx.effect + window capture）+ 两个 slot 注册
@@ -182,11 +207,11 @@ docs/dir-filter-evaluation.md 目录筛选可行性评估：索引体积实测 +
 按「价值 / 成本」排序：
 
 1. **文件预览窗格**：导航时右侧显示选中文件的前 N 行（`fs.read` 路由已有，需处理二进制与大文件）——类 VSCode peek
-2. **目录筛选的显式语法**：加 `dir:ui index.html` 这类前缀修饰符，把任意词标记为「只筛目录」。**零索引体积、零默认行为改动**，且语义无歧义——是「自动目录筛选」被否决后的替代方案（见 `docs/dir-filter-evaluation.md`）
-3. **拼音/首字母匹配**：中文文件名用拼音检索（索引已在内存，客户端加分词映射即可，成本中等）
-4. **多选批量引用**：`Ctrl+Space` 标记多行，一次 `Ctrl+Enter` 全部加入对话
-5. **`fs.watch` 精准失效**：替代/补充 TTL，索引实时跟随文件变更（Windows 支持递归 watch，Linux 需逐目录——跨平台取舍）
-6. **设置页扩展**：自定义键位、防抖时长、最近记录上限（`settings.section` slot 已就位，当前用于索引规则）
-7. **全文搜索模式**：`%query` 前缀切换内容检索（索引已就位，加内容扫描路由即可）
+2. **拼音/首字母匹配**：中文文件名用拼音检索（索引已在内存，客户端加分词映射即可，成本中等）
+3. **多选批量引用**：`Ctrl+Space` 标记多行，一次 `Ctrl+Enter` 全部加入对话
+4. **`fs.watch` 精准失效**：替代/补充 TTL，索引实时跟随文件变更（Windows 支持递归 watch，Linux 需逐目录——跨平台取舍）
+5. **设置页扩展**：自定义键位、防抖时长、最近记录上限（`settings.section` slot 已就位，当前用于索引规则）
+6. **全文搜索模式**：`%query` 前缀切换内容检索（索引已就位，加内容扫描路由即可）
+7. **`dir:` 查询提速**：目前 22–48ms（需按路径打分）。可用索引期预计算的目录段倒排索引把候选直接切出来，代价 +4.3MB（占总索引 ~23MB 的 19%），见 `docs/dir-filter-evaluation.md`
 8. **索引截断提示**：walk 触及 `MAX_VISITED`（50 万）时向客户端上报 `indexTruncated`，浮层 footer 显式告警（host 半已在响应中返回该字段，待客户端消费）
 

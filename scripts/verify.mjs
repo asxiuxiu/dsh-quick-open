@@ -88,20 +88,20 @@ const bundled = await build({
   bundle: true, format: 'esm', platform: 'node', target: 'node20', write: false,
 })
 const matchUrl = `data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`
-const { createMatchScratch, scoreEntry } = await import(matchUrl)
+const { createMatchScratch, prepareQuery, scoreEntry } = await import(matchUrl)
 
 function query(text, max = 200) {
-  const trimmed = text.trim().toLowerCase()
-  const pieces = trimmed.split(/\s+/u).filter(Boolean)
+  const prepared = prepareQuery(text)
+  if (prepared.pieces.length === 0) return { rows: [], total: 0 }
   let longestPiece = 1
-  for (const p of pieces) if (p.length > longestPiece) longestPiece = p.length
+  for (const p of prepared.pieces) if (p.text.length > longestPiece) longestPiece = p.text.length
   let longestPath = 1
   for (const e of entries) if (e.pathLower.length > longestPath) longestPath = e.pathLower.length
   const scratch = createMatchScratch(longestPiece, longestPath)
   const scored = []
   for (const entry of entries) {
     const name = entry.path.slice(entry.path.length - entry.nameLower.length)
-    const r = scoreEntry(trimmed, pieces, name, entry.nameLower, entry.path, entry.pathLower, scratch)
+    const r = scoreEntry(prepared, name, entry.nameLower, entry.path, entry.pathLower, scratch)
     if (r === undefined) continue
     scored.push({ ...r, path: entry.path })
   }
@@ -110,6 +110,7 @@ function query(text, max = 200) {
 }
 
 const cases = [
+  // --- existing behaviour: these MUST keep passing unchanged ---
   ['clntmod', 'client_module'],
   ['playerctrl', 'player_camera_controller'],
   ['apprpc', 'app_rpc.nsd'],
@@ -130,21 +131,30 @@ const cases = [
   ['rpc app nsd', 'app_rpc.nsd'],
   ['source/client/client_module', 'client_module'],
   ['chaos client module', 'client_module'],
+  // --- new: explicit dir: scoping ---
+  ['dir:ui index.html', '_content/ui/'],
+  ['dir:bag index.html', '_content/ui/coherent/bag'],
+  ['dir:game_scene chaos_game_scene', 'game_scene'],
+  ['dir:client chaos_client_tick', 'client'],
+  ['file:index.html', 'index.html'],
+  ['d:ui index.html', '_content/ui/'],
 ]
 let pass = 0
 const times = []
 for (const [q, expect] of cases) {
   const t0 = performance.now()
   const r = query(q)
-  times.push(performance.now() - t0)
+  const dt = performance.now() - t0
+  times.push(dt)
   const top = r.rows[0]?.path ?? '(none)'
   const hit = top.toLowerCase().includes(expect.toLowerCase())
   if (hit) pass++
-  console.log(`\n${hit ? 'OK  ' : 'MISS'} "${q}" -> ${expect} [${r.total}${r.total > 200 ? '+' : ''}]`)
+  console.log(`\n${hit ? 'OK  ' : 'MISS'} "${q}" -> ${expect} [${r.total}${r.total > 200 ? '+' : ''}, ${dt.toFixed(1)}ms]`)
   for (const row of r.rows.slice(0, 3)) {
     const ns = row.nameSpans.map(s => `${s.start}-${s.end}`).join(',')
-    console.log(`        ${String(row.score).padStart(8)} name[${ns}] ${row.path}`)
+    const ds = row.dirSpans.map(s => `${s.start}-${s.end}`).join(',')
+    console.log(`        ${String(row.score).padStart(8)} name[${ns}] dir[${ds}] ${row.path}`)
   }
 }
 times.sort((a, b) => a - b)
-console.log(`\n${'='.repeat(70)}\nPASS ${pass}/${cases.length}  median=${times[Math.floor(times.length/2)].toFixed(1)}ms  max=${times[times.length-1].toFixed(1)}ms`)
+console.log(`\n${'='.repeat(70)}\nPASS ${pass}/${cases.length}  median=${times[Math.floor(times.length/2)].toFixed(1)}ms  p90=${times[Math.floor(times.length*0.9)].toFixed(1)}ms  max=${times[times.length-1].toFixed(1)}ms`)

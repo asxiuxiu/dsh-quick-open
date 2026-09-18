@@ -46,7 +46,7 @@ import {
   serializeRules,
   type IndexRules,
 } from './rules.ts'
-import { createMatchScratch, scoreEntry, type MatchSpan } from './match.ts'
+import { createMatchScratch, prepareQuery, scoreEntry, type MatchSpan } from './match.ts'
 
 /** Plugin identity for cordis.yml rows. */
 export const name = 'dsh-quick-open'
@@ -526,18 +526,17 @@ interface MatchRow {
  * same order.
  */
 function queryIndex(entries: readonly IndexEntry[], query: string, maxMatches: number): { matches: MatchRow[]; truncated: boolean } {
-  const trimmed = query.trim().toLowerCase()
-  if (trimmed === '') return { matches: [], truncated: false }
-  const pieces = trimmed.split(/\s+/u).filter(piece => piece !== '')
-  if (pieces.length === 0) return { matches: [], truncated: false }
+  const prepared = prepareQuery(query)
+  if (prepared.pieces.length === 0) return { matches: [], truncated: false }
 
   // Size the DP scratch once for the whole scan. The matrix needs
-  // `pieceLength × targetLength` cells and the target can be a full path, so
-  // this is driven by the longest piece and the longest path in the index.
-  // Reusing one buffer is what keeps a 50k-entry scan interactive.
+  // `pieceLength × targetLength` cells, and the longest target any piece can
+  // be scored against is the full path (basename-only and directory-only
+  // scoring are both shorter). Reusing one buffer is what keeps a 50k-entry
+  // scan interactive.
   let longestPiece = 1
-  for (const piece of pieces) {
-    if (piece.length > longestPiece) longestPiece = piece.length
+  for (const piece of prepared.pieces) {
+    if (piece.text.length > longestPiece) longestPiece = piece.text.length
   }
   let longestPath = 1
   for (const entry of entries) {
@@ -555,7 +554,7 @@ function queryIndex(entries: readonly IndexEntry[], query: string, maxMatches: n
     const nameLower = entry.nameLower
     const name = entry.path.slice(entry.path.length - nameLower.length)
 
-    const scoredEntry = scoreEntry(trimmed, pieces, name, nameLower, entry.path, entry.pathLower, scratch)
+    const scoredEntry = scoreEntry(prepared, name, nameLower, entry.path, entry.pathLower, scratch)
     if (scoredEntry === undefined) continue
 
     scored.push({
