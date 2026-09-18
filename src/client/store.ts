@@ -11,9 +11,8 @@ export interface MatchSpan {
 }
 
 /** One visible row: a workspace-relative path plus its kind when known
- *  (the indexed `/quick-open/api/search` route always knows; the legacy
- *  `fs.search` fallback and the recents list leave it undefined and actions
- *  probe on demand). */
+ *  (the indexed `/quick-open/api/search` route always knows; the recents
+ *  list leaves it undefined and actions probe on demand). */
 export interface SearchEntry {
   path: string
   isDir?: boolean
@@ -27,8 +26,8 @@ export interface SearchEntry {
   rootLabel?: string
   /**
    * Matched spans of the basename, as offsets into the basename (not the
-   * path). Empty for the legacy route and the recents list, which do not
-   * score and therefore cannot report spans.
+   * path). Empty for the recents list, which does not score and therefore
+   * cannot report spans.
    */
   nameSpans?: MatchSpan[]
   /**

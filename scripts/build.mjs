@@ -10,8 +10,8 @@
  *
  *      window.__ModuleLoader__.load({ id, factory: (require) => { … } })
  *
- *    — the exact shape every official @deepseek-ai client bundle and
- *    dsh-better-sidebar ship. `react` / `react-dom` stay external: the
+ *    — the exact shape every official @deepseek-ai client bundle ships.
+ *    `react` / `react-dom` stay external: the
  *    module system answers them from the platform seed table, so the layer
  *    renders with the host's own React instance (two Reacts would break
  *    hooks inside the slot tree).

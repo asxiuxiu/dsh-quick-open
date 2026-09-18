@@ -1,8 +1,7 @@
 /**
  * Quick-open controller: owns every side effect the layer needs — global
- * shortcut gating, workspace search, recent-files history, file open
- * (through the dsh-better-sidebar service), and conversation-draft reference
- * insert.
+ * shortcut gating, workspace search, recent-files history, file open (through
+ * DSH's native right Sidebar), and conversation-draft reference insert.
  *
  * Search pipeline, fastest path first:
  *
@@ -14,10 +13,6 @@
  *    returns rows ALREADY RANKED together with the spans to highlight
  *    (single-digit ms at 50k entries). The client must not re-rank these:
  *    fuzzy matches are not substrings, and only the host has the index.
- * 3. LEGACY FALLBACK — dsh-better-sidebar's `fs.search` (full tree walk per
- *    keystroke, no isDir, no spans): used when the host half is unavailable,
- *    detected once per activation rather than retried per keystroke. Rows from
- *    this route carry no spans, so they render unhighlighted.
  *
  * The client-side incremental filter that used to sit in front of the network
  * is gone: it relied on substring semantics (extending a query can only shrink
@@ -28,16 +23,16 @@
  *   Any action that keeps the layer open (reference append) bumps `focusSeq`
  *   — twice, the second pass ~80ms later to win the race against the
  *   composer's own async focus when the draft is written.
- * - DIRECTORIES: rows whose kind is unknown (legacy route, recents) are
- *   probed via `/sidebar/api/fs.tree` on demand; indexed rows skip the
- *   probe. Files open in the sidebar editor; folders reference as `@dir/`.
+ * - DIRECTORIES: rows whose kind is unknown (recents) are probed before an
+ *   open; indexed rows carry `isDir` and skip the probe. Files open in the
+ *   sidebar editor; folders reference as `@dir/`.
  * - REFERENCES: appended to the draft as plain text with exactly one
  *   separating space (see `appendReferenceText` for why the chip path is not
  *   usable from a plugin).
  * - RECENTS: an empty query shows the per-workspace recent list
  *   (localStorage), so Ctrl+P → Enter reopens the last file.
  */
-import type { BetterSidebarServiceLike, Context, SessionScope } from './types.ts'
+import type { Context, SessionScope, SidebarRightServiceLike } from './types.ts'
 import type { MatchSpan, QuickOpenStore, SearchEntry } from './store.ts'
 
 /** Debounce before a keystroke becomes a search request (ms). */
@@ -72,16 +67,51 @@ function absolutePathOf(scope: SessionScope, entry: SearchEntry): string {
 }
 
 /**
+ * Component-encode one address segment, keeping ':' literal so a Windows
+ * drive letter survives (`E:` reads as `E:`, not `E%3A`).
+ */
+function encodeSegment(segment: string): string {
+  return encodeURIComponent(segment).replace(/%3A/gi, ':')
+}
+
+/**
+ * The `dsh-resource://file/…` address of one file, in the native right
+ * Sidebar's address grammar (`@deepseek-ai/dsh-util-workspace-path`).
+ *
+ * A path inside the session workspace is recorded relative to its root, so
+ * the same file in two sessions reads as two distinct addresses; an absolute
+ * path outside the workspace keeps its own spelling, which the grammar
+ * resolves regardless of cwd. Both separators normalize to '/'.
+ */
+export function fileAddressFor(sessionId: string, cwd: string | undefined, path: string): string {
+  const normalized = path.replace(/\\/g, '/')
+  const root = cwd === undefined ? '' : cwd.replace(/\\/g, '/').replace(/\/+$/, '')
+  const relative = !isAbsolutePath(normalized)
+    ? normalized.replace(/^(?:\.\/)+/, '')
+    : root !== '' && normalized === root
+      ? ''
+      : root !== '' && normalized.startsWith(`${root}/`)
+        ? normalized.slice(root.length + 1)
+        : normalized
+  const encoded = relative.split('/').map(encodeSegment).join('/')
+  return `dsh-resource://file/session/${encodeSegment(sessionId)}/${encoded}`
+}
+
+/**
  * The DSH `@file` spelling for one path, mirroring the host grammar
  * (`formatFileMention` in @deepseek-ai/dsh-file-reference): plain when there
- * is no whitespace, quoted when there is; `undefined` when the path carries
- * a control character or quote the editor grammar cannot represent.
+ * is no whitespace, quoted when there is; a directory keeps its trailing slash
+ * (a quoted directory deliberately leaves the quote OPEN so completion can
+ * descend another level). `undefined` when the path carries a control
+ * character or quote the editor grammar cannot represent.
  */
-function fileMention(relativePath: string): string | undefined {
-  const path = relativePath.replace(/[\\/]+$/, '')
+function fileMention(path: string, kind: 'file' | 'directory'): string | undefined {
+  const base = path.replace(/[\\/]+$/, '')
+  const text = kind === 'directory' ? `${base}/` : base
   // eslint-disable-next-line no-control-regex -- rejecting control characters is the point
-  if (/[\u0000-\u001f\u007f-\u009f\u0022]/u.test(path)) return undefined
-  return /\s/u.test(path) ? `@"${path}"` : `@${path}`
+  if (/[\u0000-\u001f\u007f-\u009f\u0022]/u.test(text)) return undefined
+  if (!/\s/u.test(text)) return `@${text}`
+  return kind === 'directory' ? `@"${text}` : `@"${text}"`
 }
 
 /** Shared POST helper for the `{ok:true,value}` JSON envelope both plugin APIs use. */
@@ -122,51 +152,19 @@ interface IndexedSearchResult {
   indexAge?: number
 }
 
-interface LegacySearchResult {
-  matches: string[]
-  truncated: boolean
-}
-
 /**
- * Directory probe for rows whose kind the wire did not carry: `fs.tree`
- * lists one level and throws on a non-directory path, so success/failure is
- * the isDir signal. Any failure is treated as "file" so a probe hiccup never
- * blocks opening. Extra-root rows probe their absolute path.
+ * Directory probe for rows whose kind the wire did not carry (the recents
+ * list). This plugin's own host route answers `quick-open/api/probe`: it
+ * stats the path and reports whether it is a directory. Any failure is
+ * treated as "file" so a probe hiccup never blocks opening.
  */
 async function probeIsDir(scope: SessionScope, relativePath: string): Promise<boolean> {
   try {
-    await apiCall('/sidebar/api', 'fs.tree', scopePayload(scope, { path: relativePath }))
-    return true
+    const result = await apiCall<{ isDir?: boolean }>('/quick-open/api', 'probe', scopePayload(scope, { path: relativePath }))
+    return result.isDir === true
   } catch {
     return false
   }
-}
-
-/**
- * Legacy-route ordering: the `fs.search` fallback returns bare paths with no
- * score, so a simple "exact basename > prefix > other, shorter path first"
- * order is applied here. The indexed route needs none — the host already
- * ranked those rows with the real scorer.
- */
-export function rankMatches(entries: SearchEntry[], query: string): SearchEntry[] {
-  const needle = query.trim().toLowerCase()
-  if (needle === '') return entries
-  const score = (rel: string): number => {
-    const name = nameLowerOf(rel)
-    if (name === needle) return 0
-    if (name.startsWith(needle)) return 1
-    return 2
-  }
-  return entries
-    .map((entry, index) => ({ entry, index, score: score(entry.path) }))
-    .sort((a, b) => a.score - b.score || a.entry.path.length - b.entry.path.length || a.index - b.index)
-    .map(item => item.entry)
-}
-
-/** Lowercase basename of a '/'-separated relative path. */
-function nameLowerOf(rel: string): string {
-  const at = rel.lastIndexOf('/')
-  return (at === -1 ? rel : rel.slice(at + 1)).toLowerCase()
 }
 
 export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
@@ -174,12 +172,6 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
   let noticeTimer: number | undefined
   let inFlight: AbortController | undefined
   let searchSeq = 0
-  /**
-   * Fast-route availability: undefined = untested, true/false after the
-   * first settled request. A failed probe disables the route for the rest of
-   * the activation (an abort is not a failure).
-   */
-  let fastRoute: boolean | undefined
   /** Small LRU of served results by scope+query: instant backspace/reopen. */
   const queryCache = new Map<string, { entries: SearchEntry[]; complete: boolean }>()
 
@@ -195,14 +187,12 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
   const scopeKeyOf = (scope: SessionScope): string => `${scope.sessionId}\n${scope.cwd ?? ''}`
 
   /**
-   * The sidebar service, gated on its monotonic capability list
-   * ('openFile' exists since v0.12.0 and features are never removed).
+   * The native right Sidebar's navigation face. It is the only channel a
+   * plugin has for opening a file in the sidebar, and the sidebar's own file
+   * tree goes through it too, so a quick-open Enter and a tree click land
+   * identically. Absent only before the sidebar half mounts.
    */
-  const sidebar = (): BetterSidebarServiceLike | undefined => {
-    const service = ctx.get('betterSidebar')
-    if (service === undefined || !service.features.includes('openFile')) return undefined
-    return service
-  }
+  const sidebarRight = (): SidebarRightServiceLike | undefined => ctx.get('sidebarRight')
 
   // --- recents (per-workspace, localStorage) ---
 
@@ -346,31 +336,17 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
     if (state.sessionId !== currentScope()?.sessionId) close()
   }
 
-  /** One network search: indexed route first, legacy fs.search as fallback. */
+  /** One network search against this plugin's own indexed route. */
   const fetchEntries = async (
     scope: SessionScope,
     query: string,
     signal: AbortSignal,
   ): Promise<{ entries: SearchEntry[]; truncated: boolean; indexInfo: string | null }> => {
-    if (fastRoute !== false) {
-      try {
-        const found = await apiCall<IndexedSearchResult>('/quick-open/api', 'search', scopePayload(scope, { query }), signal)
-        fastRoute = true
-        const indexInfo = found.indexedEntries !== undefined
-          ? `索引 ${found.indexedEntries.toLocaleString()} 项 · ${Math.round((found.indexAge ?? 0) / 1000)}s 前`
-          : null
-        return { entries: found.matches, truncated: found.truncated, indexInfo }
-      } catch (error) {
-        if (signal.aborted) throw error
-        fastRoute = false // the host half is unavailable: legacy path for this activation
-      }
-    }
-    const legacy = await apiCall<LegacySearchResult>('/sidebar/api', 'fs.search', scopePayload(scope, { query }), signal)
-    return {
-      entries: rankMatches(legacy.matches.map(path => ({ path })), query),
-      truncated: legacy.truncated,
-      indexInfo: null,
-    }
+    const found = await apiCall<IndexedSearchResult>('/quick-open/api', 'search', scopePayload(scope, { query }), signal)
+    const indexInfo = found.indexedEntries !== undefined
+      ? `索引 ${found.indexedEntries.toLocaleString()} 项 · ${Math.round((found.indexAge ?? 0) / 1000)}s 前`
+      : null
+    return { entries: found.matches, truncated: found.truncated, indexInfo }
   }
 
   const cachePut = (key: string, value: { entries: SearchEntry[]; complete: boolean }): void => {
@@ -481,9 +457,9 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
   /** The row's kind, probing only when the wire did not carry it. */
   const resolveIsDir = (scope: SessionScope, entry: SearchEntry): Promise<boolean> => {
     if (entry.isDir !== undefined) return Promise.resolve(entry.isDir)
-    // The indexed route always carries isDir; a probe only happens for the
-    // legacy `fs.search` fallback and the recents list. Those rows may still
-    // be extra-root files, so probe their absolute path.
+    // Rows from the indexed route always carry isDir; only the recents list
+    // can lack it. Those rows may be extra-root files, so probe the absolute
+    // path.
     return probeIsDir(scope, absolutePathOf(scope, entry))
   }
 
@@ -565,15 +541,23 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
       reclaimFocus()
       return
     }
-    const service = sidebar()
+    const service = sidebarRight()
     if (service === undefined) {
-      notice('需要 dsh-better-sidebar 才能打开文件（搜索与引用不受影响）')
+      notice('侧边栏服务未就绪，暂时无法打开文件')
       reclaimFocus()
       return
     }
     // An extra-root row already carries an absolute path; joining it against
     // the cwd would produce nonsense like `E:\chaos\E:\wolfgang\...`.
-    service.openFile(scope, absolutePathOf(scope, entry))
+    try {
+      service.openResource(fileAddressFor(scope.sessionId, scope.cwd, absolutePathOf(scope, entry)))
+    } catch (error) {
+      // An address no registered tab type claims throws in the navigation
+      // face; surface it instead of letting the overlay vanish silently.
+      notice(error instanceof Error ? error.message : '无法打开这个文件')
+      reclaimFocus()
+      return
+    }
     pushRecent(entry)
     close()
   }
@@ -619,24 +603,15 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
     const scope = currentScope()
     if (scope === undefined) return
 
-    // An extra-root row is referenced by ABSOLUTE path: the workspace-relative
+    // The reference is ABSOLUTE for an extra-root row: the workspace-relative
     // spelling does not exist for a file outside the workspace, and DSH's file
     // grammar resolves any absolute path regardless of cwd.
     const referencePath = absolutePathOf(scope, entry)
 
-    if (await resolveIsDir(scope, entry)) {
-      // A directory keeps its trailing slash so folder completion still works.
-      const mention = `@${referencePath.replace(/[\\/]+$/, '')}/`
-      if (appendReferenceText(scope.sessionId, mention)) {
-        pushRecent(entry)
-      } else {
-        notice('对话服务不可用')
-      }
-      reclaimFocus()
-      return
-    }
-
-    const reference = fileMention(referencePath)
+    // Folders reference as @dir/ (no quote survives the trailing slash);
+    // files go through the shared grammar. Open does not depend on this.
+    const kind = await resolveIsDir(scope, entry) ? 'directory' as const : 'file' as const
+    const reference = fileMention(referencePath, kind)
     if (reference === undefined) {
       notice('路径包含无法引用的字符')
       reclaimFocus()
@@ -670,3 +645,6 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
 }
 
 export type QuickOpenController = ReturnType<typeof createQuickOpenController>
+
+/** The `@`-mention spelling, exposed for the offline address/mention checks. */
+export const fileMentionForTest = fileMention

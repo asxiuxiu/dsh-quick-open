@@ -1,6 +1,5 @@
 /**
- * IME-composition key guard (the DSH core convention, issue #535 — mirrored
- * from dsh-better-sidebar's ime-guard.ts).
+ * IME-composition key guard (the DSH core convention, issue #535).
  *
  * While a Chinese/Japanese/Korean input method is composing, every pressed
  * key BELONGS to the input method: arrows move the candidate highlight,

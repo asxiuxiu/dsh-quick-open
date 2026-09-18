@@ -2,25 +2,23 @@
  * dsh-quick-open host half: the `/quick-open/api` JSON API — an indexed
  * workspace file search built for speed.
  *
- * Why this exists: dsh-better-sidebar's `fs.search` re-walks the whole tree
- * with SEQUENTIAL `opendir` calls on every keystroke (fine for small trees,
- * 0.5-2s on a 100k-file repo, and aborted requests keep burning server CPU
- * because the walk cannot be cancelled). This host half keeps a per-workspace
- * IN-MEMORY INDEX instead:
+ * Why this exists: walking the tree on every keystroke is unusable on a
+ * large repository (0.5-2s per query once a workspace passes ~100k files).
+ * This host half keeps a per-workspace IN-MEMORY INDEX instead:
  *
  * - One parallel `readdir` walk (16-way concurrency) builds the full entry
  *   list once; queries are pure in-memory substring filters (<10ms even at
  *   100k entries).
  * - Stale-while-revalidate: an index older than TTL serves instantly while
  *   a background rebuild refreshes it.
- * - Entries carry `isDir`, so the client never probes `fs.tree` to decide
- *   whether a match opens (file) or references as `@dir/` (folder).
+ * - Entries carry `isDir`, so the client never probes the filesystem to
+ *   decide whether a match opens (file) or references as `@dir/` (folder).
  * - The search root is ALWAYS the host-resolved session cwd (attached
  *   session header first, caller-supplied absolute cwd only as the hydration
  *   fallback) — the walk can never escape the workspace.
  *
  * What the walk indexes is governed by the workspace's own
- * `<cwd>/.dsh-quick-open.json` (see ./rules.ts): exclude/include directories
+ * `<cwd>/.dsh/quick-open.json` (see ./rules.ts): exclude/include directories
  * plus a file-type filter. Without that file the built-in DEFAULT_RULES
  * apply, so a workspace that never configures anything still gets a sane,
  * low-noise index.
@@ -29,7 +27,7 @@
  * collide with another plugin's routes. The browser-trust fence mirrors the
  * /sidebar and /api gateways: loopback or configured trusted hosts only.
  */
-import { mkdir, readdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -721,6 +719,22 @@ export function apply(ctx: HostContext): void {
           await unlink(legacyConfigPathFor(cwd)).catch(() => {})
           indexes.delete(cwd)
           writeOk(res, { cwd, rules: DEFAULT_RULES })
+          return
+        }
+
+        if (method === 'probe') {
+          // The one question the client cannot answer locally: is a path the
+          // index never classified (a recents entry from a previous session)
+          // a directory? Absolute paths outside the workspace are allowed —
+          // extra roots live there.
+          const target = requireString(payload, 'path')
+          const absolute = isAbsolute(target) ? target : join(cwd, target)
+          try {
+            const info = await stat(absolute)
+            writeOk(res, { isDir: info.isDirectory() })
+          } catch {
+            writeOk(res, { isDir: false })
+          }
           return
         }
 

@@ -5,9 +5,9 @@
  *   (consumed via `inject`).
  * - `conversation`: provided by @deepseek-ai/dsh-client-ui-conversation,
  *   read inject-free through `ctx.get` (the same pattern the app's own
- *   plugins and dsh-better-sidebar use).
- * - `betterSidebar`: provided by dsh-better-sidebar (v0.12.0+ capability
- *   list; features are never removed — gate usage on membership).
+ *   plugins use).
+ * - `sidebarRight`: provided by @deepseek-ai/dsh-client-ui-sidebar-right, the
+ *   native right Sidebar navigation face every file open goes through.
  */
 
 /** A session-scoped cordis context (what `ctx.sessions.scope(id)` returns). */
@@ -58,16 +58,31 @@ export interface SessionScope {
   cwd?: string
 }
 
-export interface BetterSidebarServiceLike {
-  readonly features: readonly string[]
-  openFile(scope: SessionScope, path: string, title?: string): void
+/** One navigation option every native right-Sidebar open accepts. */
+export interface SidebarRightOpenOptions {
+  /** Navigation parameters the claimed tab type receives (`line` jumps to a line). */
+  params?: Record<string, unknown>
+  /** The tab type to claim the address with, when the caller wants to name it. */
+  kind?: string
+}
+
+/**
+ * The native right Sidebar's navigation face (`ctx.sidebarRight`).
+ *
+ * `openResource` takes a `dsh-resource://<type>/…` address and hands it to
+ * whichever registered tab type claims that type — the same entry point the
+ * sidebar's own file tree uses, so a file opens exactly as a click there
+ * would. An unclaimed or malformed address throws.
+ */
+export interface SidebarRightServiceLike {
+  openResource(address: string, options?: SidebarRightOpenOptions): void
 }
 
 /** The client cordis context, narrowed to the members this plugin uses. */
 export interface Context {
   slots: SlotsService
   sessions: SessionsService
-  get(name: 'betterSidebar'): BetterSidebarServiceLike | undefined
+  get(name: 'sidebarRight'): SidebarRightServiceLike | undefined
   get(name: 'conversation'): ConversationService | undefined
   get(name: string): unknown
   effect(body: () => (() => void) | void, label?: string): void

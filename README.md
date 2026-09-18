@@ -8,9 +8,9 @@ DSH Web GUI 插件：VSCode 式 `Ctrl+P` 快速打开，**索引级搜索性能 
 - **空格分词 AND**：`game scene lua` 三片必须全部命中；**查询含 `/` 时匹配完整路径**，可用来按目录定位（`ui/index.html`）
 - 匹配到的字符**逐段高亮**（不再是整段子串），路径查询时目录片段也会高亮
 - 空查询显示**最近使用**文件（按工作区记忆，`Ctrl+P → Enter` 直接重开上一文件）
-- `Enter` 在侧边栏编辑器中打开文件（走 `ctx.betterSidebar.openFile()` 公开服务契约）
+- `Enter` 在侧边栏中打开文件（走 DSH 原生右侧栏 `ctx.sidebarRight.openResource()`，与侧边栏文件树点击同一条路径）
 - `Ctrl+Enter` 把文件作为纯文本 `@` 引用插入当前会话输入框，**浮层保持打开、焦点留在搜索框**，可连续添加多个文件
-- 结果行携带 `isDir`：目录按 `Enter` 提示，按 `Ctrl+Enter` 以 `@dir/` 纯文本引用（索引路由零探测；legacy 降级路径按需探测 `fs.tree`）
+- 结果行携带 `isDir`：目录按 `Enter` 提示，按 `Ctrl+Enter` 以 `@dir/` 纯文本引用（索引路由零探测；历史记录中的行按需向本插件 host 半探测）
 - `↑↓`/`PageUp`/`PageDown`/`Home`/`End` 导航、`Esc` 关闭、点击遮罩关闭；中文输入法组词中不响应按键
 - footer 显示索引透明度信息（条目数与新鲜度）
 - **每工作区可配置索引规则**（设置页编辑，见下）：排除目录 / 强制包含目录 / 后缀白名单 / 文件名白名单 / 是否索引目录
@@ -169,17 +169,16 @@ E:/cb2_master/dev/wo[l]fgang/_games/pr[o]ven_[g]round/_content/ui/coherent/black
 
 ## 依赖
 
-- **打开文件**依赖 [`dsh-better-sidebar`](https://www.npmjs.com/package/dsh-better-sidebar)（≥ v0.12.0 的 `openFile` 能力）
-- **搜索/引用不依赖它**：索引路由由本插件 host 半提供；自有路由不可用时降级到 `fs.search`（此时搜索依赖 better-sidebar 的 host 路由）
+**只依赖 DSH 本体**，不依赖任何第三方侧边栏插件：
 
-降级矩阵：缺 better-sidebar → 搜索与引用照常，Enter 提示无法打开；自有路由缺失 → 自动退回 `fs.search`。
+- 搜索 / 引用：全部由本插件自己的 host 半与 DSH 原生 `conversation` 服务提供
+- 打开文件：DSH 原生右侧栏 `ctx.sidebarRight.openResource()`（由 `@deepseek-ai/dsh-client-ui-sidebar-right` 提供，随 DSH 发行）
+
+侧边栏若由第三方插件接管（例如 `dsh-better-sidebar` 会把文件类型注册到同一个原生侧边栏注册表），打开行为不变——本插件只走原生注册表，至于最后由谁渲染，不在它的感知范围内。
 
 ## 安装
 
 ```bash
-# 依赖插件（仅「打开文件」需要；建议安装）
-dsh plugin --profile web add dsh-better-sidebar
-
 # 本插件（GitHub 源 / npm 源 / 本地 link 三选一）
 dsh plugin --profile web add github:asxiuxiu/dsh-quick-open
 dsh plugin --profile web add dsh-quick-open
@@ -199,6 +198,7 @@ npm run typecheck
 node scripts/verify.mjs                  # 匹配质量回归（含 dir:/file: 用例）
 node scripts/verify-no-regression.mjs    # 对比 HEAD 与当前：证明不含分隔符的查询行为未变
 node scripts/verify-grammar.mjs          # dir:/file: 前缀解析边界用例
+node --experimental-strip-types scripts/verify-file-address.mjs   # 文件地址 + @ 引用拼写
 node --expose-gc scripts/eval-cost.mjs   # 索引体积基线 + 候选结构代价
 node scripts/eval-ambiguity.mjs          # 目录名歧义量化
 ```
@@ -209,17 +209,18 @@ node scripts/eval-ambiguity.mjs          # 目录名歧义量化
 src/rules.ts            索引规则：类型/默认规则/目录匹配（子树语义 + **/ glob）/文件过滤/配置解析与序列化
 src/match.ts            模糊匹配器：VSCode quick-open 打分器移植（分档/字符分/顺序约束/紧凑度平局/高亮区间）
                         含查询解析：dir: / file: 作用域前缀（纯解析层，不带前缀时行为与之前逐字节一致）
-src/index.ts            host 半：/quick-open/api/{search,config.get,config.set,config.reset}
+src/index.ts            host 半：/quick-open/api/{search,probe,config.get,config.set,config.reset}
                         （规则驱动的并行建索引、SWIG 式模糊查询、SWR 保鲜、配置文件热重验、原子写入、trust fence、isDir 标记）
 src/client/index.tsx    client 入口：全局 Ctrl+P（ctx.effect + window capture）+ 两个 slot 注册
-src/client/controller.ts 搜索管线（查询缓存/索引路由/legacy 降级）、打开、引用、最近记录、焦点回收
+src/client/controller.ts 搜索管线（查询缓存/索引路由）、文件地址构造、打开、引用、最近记录、焦点回收
 src/client/quick-open.tsx 浮层组件（内联样式，多段高亮，无 CSS 构建链）
 src/client/settings.tsx 设置面板：当前工作区规则编辑（无会话时只读降级）
 src/client/store.ts     每激活一份的状态存储（useSyncExternalStore）
 src/client/ime-guard.ts IME 组词判据（isComposing + keyCode 229，DSH core 约定）
-src/client/types.ts     最小服务契约类型（slots / sessions / conversation / betterSidebar）
+src/client/types.ts     最小服务契约类型（slots / sessions / conversation / sidebarRight）
 docs/matching-research.md 匹配方案调研：VSCode/fzf/fzy 源码结论 + 8 种设计的实测对比与负结果
 docs/dir-filter-evaluation.md 目录筛选可行性评估：索引体积实测 + 目录名歧义量化（结论：不做自动筛选）
+docs/better-sidebar-integration.md 侧边栏集成调研：文件打开/引用的通道与备选方案
 ```
 
 ## 路线图（可拓展方向）
