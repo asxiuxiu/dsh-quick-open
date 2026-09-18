@@ -90,12 +90,24 @@ const styles: Record<string, CSSProperties> = {
   rowHit: {
     color: '#4ec9b0',
   },
-  rowDir: {
+  /**
+   * The directory as a right-aligned suffix, front-elided in JS rather than by
+   * CSS. CSS `text-overflow: ellipsis` clips the TAIL, which is exactly the
+   * part that distinguishes two rows of the same file name — so a deep shared
+   * prefix (`E:/cb2_master/dev/.../client/public/chaos/client/`) would hide the
+   * one segment the user actually needs to compare.
+   */
+  rowDirPinned: {
     color: '#8a8a8a',
     fontSize: 12,
+    whiteSpace: 'nowrap',
+    flexShrink: 1,
+    minWidth: 0,
     overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    flex: 1,
+  },
+  /** The elided leading portion of a path, dimmed to read as "omitted". */
+  pathDim: {
+    color: '#6a6a6a',
   },
   rowRoot: {
     flexShrink: 0,
@@ -149,6 +161,74 @@ function splitPath(rel: string): { dir: string; name: string } {
   return at === -1 ? { dir: '', name: rel } : { dir: rel.slice(0, at + 1), name: rel.slice(at + 1) }
 }
 
+/** How many directory segments to keep when pinning the tail of a deep path. */
+const PINNED_SEGMENTS = 3
+
+/**
+ * Build a SHORT, match-aware view of a directory path for the row suffix.
+ *
+ * The problem this solves: results are distinguished by their directory, but a
+ * deep path (`_source/_engine/source/client/public/chaos/client/module/`) runs
+ * off the right edge of the row, so every row looks identical. Truncating the
+ * FRONT with `…` (instead of the tail with CSS `text-overflow`) keeps the
+ * segments nearest the file — which is what actually differs between rows.
+ *
+ * When the matcher hit directory segments (a path query such as
+ * `source/client/client_module`), those segments are always kept, so the
+ * highlighted part of the path can never be the part that gets truncated away.
+ *
+ * `elided` is true when a leading prefix was dropped, and the returned offsets
+ * are in the coordinates of the returned string.
+ */
+function compactDir(
+  dir: string,
+  spans: readonly MatchSpan[] | undefined,
+): { text: string; spans: MatchSpan[]; elided: boolean } {
+  if (dir === '') return { text: '', spans: [], elided: false }
+
+  // Segment boundaries of the directory INCLUDING its trailing '/'.
+  const bounds: { start: number; end: number }[] = []
+  let start = 0
+  for (let i = 0; i < dir.length; i++) {
+    if (dir[i] === '/') {
+      bounds.push({ start, end: i + 1 })
+      start = i + 1
+    }
+  }
+  if (start < dir.length) bounds.push({ start, end: dir.length })
+
+  const keep = new Set<number>()
+  const tailFrom = Math.max(0, bounds.length - PINNED_SEGMENTS)
+  for (let i = tailFrom; i < bounds.length; i++) keep.add(i)
+
+  // Any segment containing a match is kept regardless of depth.
+  if (spans !== undefined) {
+    for (const span of spans) {
+      for (let i = 0; i < bounds.length; i++) {
+        if (span.start < bounds[i].end && span.end > bounds[i].start) keep.add(i)
+      }
+    }
+  }
+
+  const kept = [...keep].sort((a, b) => a - b)
+  // Nothing to elide: hand back the original string and offsets untouched.
+  if (kept.length === bounds.length) {
+    return { text: dir, spans: spans === undefined ? [] : [...spans], elided: false }
+  }
+
+  const segments = kept.map(i => dir.slice(bounds[i].start, bounds[i].end))
+  const text = `…${segments.join('')}`
+  // Shift offsets by the dropped prefix plus the ellipsis character.
+  const shift = bounds[kept[0]].start - 1
+  const shifted: MatchSpan[] = []
+  for (const span of spans ?? []) {
+    const s = Math.max(0, span.start - shift)
+    const e = Math.min(text.length, span.end - shift)
+    if (e > s) shifted.push({ start: s, end: e })
+  }
+  return { text, spans: shifted, elided: true }
+}
+
 /**
  * Render `text` with the given spans emphasized. Spans are half-open offsets
  * into `text`, already sorted and merged by the matcher; anything malformed is
@@ -169,13 +249,15 @@ function highlight(text: string, spans: readonly MatchSpan[] | undefined): React
   return parts
 }
 
-/**
- * The dimmed directory prefix, with path-query hits highlighted. `dirSpans`
- * are in full-path coordinates while this element renders only the prefix, so
- * offsets are used as-is (they all precede the basename by construction).
- */
+/** The dimmed directory prefix, compacted and with path hits highlighted. */
 function highlightDir(dir: string, spans: readonly MatchSpan[] | undefined): ReactNode {
-  return highlight(dir, spans)
+  const compact = compactDir(dir, spans)
+  if (compact.text === '') return null
+  const body = highlight(compact.text, compact.spans)
+  // The ellipsis marks where the path was elided, so it reads as intentional
+  // rather than as a path that literally starts with '…'.
+  if (!compact.elided) return body
+  return <span style={styles.pathDim}>{body}</span>
 }
 
 const PAGE_STEP = 10
@@ -319,7 +401,15 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
                   {highlight(name, entry.nameSpans)}
                   {entry.isDir === true && '/'}
                 </span>
-                <span style={styles.rowDir}>{highlightDir(dir, entry.dirSpans)}</span>
+                {/*
+                  The directory as a right-aligned, front-elided suffix. CSS
+                  `text-overflow` would clip the TAIL, which is exactly the part
+                  that tells two rows apart; eliding the shared prefix instead
+                  keeps the distinguishing segment visible.
+                */}
+                <span style={styles.rowDirPinned} title={dir}>
+                  {highlightDir(dir, entry.dirSpans)}
+                </span>
                 {selected && (
                   <button
                     type="button"
