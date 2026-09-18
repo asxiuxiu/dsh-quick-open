@@ -45,11 +45,18 @@ export interface QuickOpenSnapshot {
   query: string
   /**
    * The visible rows: search matches when `listKind` is 'search', recent
-   * files when it is 'recents' (empty query). Actions operate on this list
-   * uniformly.
+   * files when it is 'recents' (empty query), or one directory's direct
+   * children when it is 'drill' (Tab landed on a directory). Actions operate
+   * on this list uniformly.
    */
   matches: SearchEntry[]
-  listKind: 'search' | 'recents'
+  listKind: 'search' | 'recents' | 'drill'
+  /**
+   * The directory being browsed while `listKind` is 'drill', as a
+   * workspace-relative path with no trailing slash ('' is the workspace
+   * root). `undefined` in every other list kind.
+   */
+  drillPrefix: string | undefined
   truncated: boolean
   selected: number
   searching: boolean
@@ -72,6 +79,7 @@ const INITIAL: QuickOpenSnapshot = {
   query: '',
   matches: [],
   listKind: 'search',
+  drillPrefix: undefined,
   truncated: false,
   selected: 0,
   searching: false,

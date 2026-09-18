@@ -441,13 +441,22 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
   }
 
   const setQuery = (query: string): void => {
+    // Typing exits the drill-down: the moment the query stops being exactly
+    // the browsed directory, the user is searching again, so the flag is
+    // cleared and the debounced search below takes over. `drillPrefix` is
+    // only a label for the list header, so leaving it set would mislabel the
+    // search results as a directory listing.
+    const state = store.getSnapshot()
+    if (state.listKind === 'drill' && query.trim() !== `${state.drillPrefix ?? ''}/`) {
+      store.set({ listKind: 'search', drillPrefix: undefined })
+    }
     store.set({ query })
     if (debounceTimer !== undefined) window.clearTimeout(debounceTimer)
     if (query.trim() === '') {
       cancelSearch()
       searchSeq += 1
       // Back to the recent-files list.
-      store.set({ matches: loadRecents(), listKind: 'recents', truncated: false, selected: 0, searching: false, error: null })
+      store.set({ matches: loadRecents(), listKind: 'recents', drillPrefix: undefined, truncated: false, selected: 0, searching: false, error: null })
       return
     }
     debounceTimer = window.setTimeout(() => {
@@ -489,7 +498,8 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
   }
 
   /**
-   * Tab: complete the search box from the selected row.
+   * Tab: complete the search box from the selected row, and — when that row
+   * is the only match — start browsing the directory it lands on.
    *
    * Completion is SEGMENT-WISE, which is what makes Tab useful for drilling
    * into a tree rather than only for accepting a whole path:
@@ -502,6 +512,13 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
    * a `file:` token can only ever match a basename, so completing it with a
    * full path would produce a query that matches nothing. That mistake is easy
    * to make and silent, so the scope decides which text is written.
+   *
+   * DRILL-DOWN: when the completed row is a directory and it was the ONLY
+   * match, the list switches to that directory's direct children instead of
+   * re-running the search. A search for `ui/` answers "what matches those
+   * letters anywhere"; what the user who just Tabbed wants is "what is in
+   * here", which is containment and needs the `children` route. Typing any
+   * further character returns to normal fuzzy search (see `setQuery`).
    */
   const completeSelected = (): void => {
     const entry = selectedMatch()
@@ -540,7 +557,77 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
 
     const prefixText = prefixMatch === null ? '' : prefixMatch[1]
     const next = `${headText === '' ? '' : `${headText} `}${prefixText}${completed}${lineSuffix}`
+
+    // Drill in only when the directory is the whole answer: with several
+    // matches the user is still choosing, and replacing their result list
+    // with a directory's contents would hide the choice they were making.
+    //
+    // Already in `drill` mode the user IS browsing, so the same Tab means
+    // "descend into the highlighted folder" without the one-match condition —
+    // that is the level-by-level walk, and every row in the list is by
+    // definition inside the directory being browsed.
+    const drillable = entry.isDir === true && scope !== 'name' && lineSuffix === ''
+    if (drillable && (state.listKind === 'drill' || (state.listKind === 'search' && state.matches.length === 1))) {
+      // Write the completed query WITHOUT starting a search: the drill-in
+      // request is the one that fills the list, and letting the search race it
+      // would show the directory's matches for a frame before the children
+      // arrive. `store.set` alone keeps the box and the list consistent.
+      cancelSearch()
+      searchSeq += 1
+      store.set({ query: next })
+      drillInto(path.replace(/\/+$/, ''))
+      return
+    }
+
     applyQuery(next)
+  }
+
+  /**
+   * Show one directory's direct children, bypassing search entirely.
+   *
+   * The rows come from the `children` route because the index is the only
+   * thing that knows a directory's contents without touching the filesystem
+   * per keystroke. Failures fall back to a plain search so Tab never leaves
+   * the list in a broken state.
+   */
+  const drillInto = (prefix: string): void => {
+    const scope = currentScope()
+    if (scope === undefined) return
+    cancelSearch()
+    const seq = ++searchSeq
+    const controller = new AbortController()
+    inFlight = controller
+    store.set({ searching: true, error: null })
+
+    apiCall<IndexedSearchResult>('/quick-open/api', 'children', scopePayload(scope, { prefix }), controller.signal)
+      .then((found) => {
+        if (seq !== searchSeq || controller.signal.aborted) return
+        const indexInfo = found.indexedEntries !== undefined
+          ? `索引 ${found.indexedEntries.toLocaleString()} 项 · ${Math.round((found.indexAge ?? 0) / 1000)}s 前`
+          : null
+        store.set({
+          searching: false,
+          matches: found.matches,
+          truncated: found.truncated,
+          listKind: 'drill',
+          drillPrefix: prefix,
+          selected: 0,
+          error: null,
+          indexInfo,
+          notice: prefix === '' ? '工作区根目录' : `进入 ${prefix}/`,
+        })
+      })
+      .catch((failure: unknown) => {
+        if (seq !== searchSeq || controller.signal.aborted) return
+        store.set({
+          searching: false,
+          matches: [],
+          truncated: false,
+          listKind: 'search',
+          drillPrefix: undefined,
+          error: failure instanceof Error ? failure.message : String(failure),
+        })
+      })
   }
 
   /**

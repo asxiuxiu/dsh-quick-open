@@ -415,6 +415,8 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
       if (state.matches.length === 0) {
         return <div style={styles.status}>输入以搜索当前工作区的文件</div>
       }
+    } else if (state.listKind === 'drill' && !state.searching && state.matches.length === 0) {
+      return <div style={styles.status}>该目录为空</div>
     } else if (state.searching && state.matches.length === 0) {
       return <div style={styles.status}>搜索中…</div>
     } else if (!state.searching && state.matches.length === 0 && state.error === null) {
@@ -423,6 +425,9 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
     return (
       <>
         {state.listKind === 'recents' && <div style={styles.section}>最近使用</div>}
+        {state.listKind === 'drill' && (
+          <div style={styles.section}>{state.drillPrefix === '' ? '工作区根目录' : `${state.drillPrefix}/`}</div>
+        )}
         <div ref={listRef} style={styles.list} role="listbox">
           {state.matches.map((entry, index) => {
             const { dir, name } = splitPath(entry.path)

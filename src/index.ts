@@ -579,6 +579,56 @@ function queryIndex(entries: readonly IndexEntry[], query: string, maxMatches: n
   return { matches: scored.slice(0, maxMatches).map(item => item.row), truncated }
 }
 
+/**
+ * List the DIRECT children of one indexed directory.
+ *
+ * This answers a question fuzzy search cannot: "what is inside this
+ * directory?" A search for `ui/` returns everything matching those letters
+ * anywhere, not the entries whose parent IS `ui`. So the Tab drill-down needs
+ * containment, and containment is a prefix test over the same index.
+ *
+ * `prefix` is a workspace-relative directory path with no trailing slash (an
+ * empty string means the workspace root). A child is an entry whose path
+ * starts with `prefix/` and contains no further separator after it.
+ *
+ * Children are returned directories-first, then case-insensitively by name,
+ * which is the order a file tree uses and the order a reader scans.
+ */
+function listChildren(
+  entries: readonly IndexEntry[],
+  prefix: string,
+  maxResults: number,
+): { matches: MatchRow[]; truncated: boolean } {
+  const head = prefix === '' ? '' : `${prefix}/`
+  const byPath = new Map<string, IndexEntry>()
+  for (const entry of entries) {
+    if (head !== '' && !entry.path.startsWith(head)) continue
+    const rest = entry.path.slice(head.length)
+    if (rest === '') continue
+    // A direct child's remainder holds no separator; anything deeper is
+    // reachable by drilling into the child instead.
+    if (rest.includes('/')) continue
+    byPath.set(entry.path, entry)
+  }
+
+  const children = [...byPath.values()]
+  children.sort((a, b) => {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
+    const an = a.path.slice(a.path.length - a.nameLower.length)
+    const bn = b.path.slice(b.path.length - b.nameLower.length)
+    return an < bn ? -1 : an > bn ? 1 : 0
+  })
+
+  const truncated = children.length > maxResults
+  const matches: MatchRow[] = children.slice(0, maxResults).map(entry => ({
+    path: entry.path,
+    isDir: entry.isDir,
+    ...(entry.absolute === true ? { absolute: true } : {}),
+    ...(entry.rootLabel !== undefined ? { rootLabel: entry.rootLabel } : {}),
+  }))
+  return { matches, truncated }
+}
+
 // ── plugin ──────────────────────────────────────────────────────────────────
 
 interface WebServerLike {
@@ -663,6 +713,24 @@ export function apply(ctx: HostContext): void {
             : index.entries
           const outcome: SearchOutcome = {
             ...queryIndex(entries, query, MAX_MATCHES),
+            indexedEntries: entries.length,
+            indexAge: Date.now() - index.builtAt,
+            indexTruncated: entries.length >= MAX_VISITED,
+          }
+          writeOk(res, { cwd, ...outcome })
+          return
+        }
+
+        if (method === 'children') {
+          // The Tab drill-down: list one directory's direct children so the
+          // list behaves like a file tree instead of a search result.
+          const prefix = requireString(payload, 'prefix')
+          const index = await revalidateRules(cwd)
+          const entries = index.builtAt === 0 && index.building !== null
+            ? await index.building
+            : index.entries
+          const outcome: SearchOutcome = {
+            ...listChildren(entries, prefix, MAX_MATCHES),
             indexedEntries: entries.length,
             indexAge: Date.now() - index.builtAt,
             indexTruncated: entries.length >= MAX_VISITED,
