@@ -70,6 +70,17 @@ const CSS = `
   background: var(--dsw-alias-interactive-bg-hover, #3a3a3a);
 }
 .qo-preview-find-button:disabled { opacity: .4; cursor: default; }
+.qo-preview-find-button[aria-pressed="true"] {
+  color: var(--dsw-alias-label-primary, #eeeeee);
+  background: var(--dsw-alias-interactive-bg-active, #094771);
+  border-color: var(--dsw-alias-interactive-border-focus, #007fd4);
+}
+.qo-preview-find-partial {
+  flex: none;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary, #777777);
+  white-space: nowrap;
+}
 
 /* The selection button is portaled to the body to escape the pane's clipping,
    and anchored in viewport coordinates over the selection. The z-index must
@@ -156,6 +167,7 @@ export const previewCss = {
   find: 'qo-preview-find',
   findCount: 'qo-preview-find-count',
   findButton: 'qo-preview-find-button',
+  findPartial: 'qo-preview-find-partial',
   selection: 'qo-preview-selection',
   notice: 'qo-preview-notice',
 } as const

@@ -34,8 +34,10 @@ export function apply(ctx: Context): void {
   // Decorate DSH's built-in document preview with an in-file find bar and
   // the selection-to-conversation gesture. The stock preview keeps every
   // file address — nothing is taken over — so its renderers (text, code,
-  // Markdown, HTML, PDF, images) and controls all stay in charge.
-  registerPreviewAugmentations(ctx)
+  // Markdown, HTML, PDF, images) and controls all stay in charge. The
+  // quick-open layer's open state is shared so the find bar yields Esc to
+  // the modal on top.
+  registerPreviewAugmentations(ctx, () => controller.store.getSnapshot().open)
 
   // Global Ctrl+P: window-level capture, active for the fiber's lifetime.
   // Without a current session the key is NOT swallowed (the overlay slot

@@ -51,6 +51,21 @@ function isAbsolutePath(path: string): boolean {
   return /^(?:[\\/]|[a-zA-Z]:[\\/]|\\\\)/.test(path)
 }
 
+/**
+ * Split a trailing `:120` line suffix off a query (VSCode's goto-line
+ * spelling). The suffix is a line jump, not search text: it must not reach
+ * the fuzzy matcher, and it must survive Tab completion. Only a TRAILING
+ * colon followed by digits counts — the `dir:`/`file:` token prefixes and
+ * Windows drive letters (`E:/...`) both keep their colons.
+ */
+export function splitLineSuffix(query: string): { query: string, line?: number } {
+  const match = /:(\d+)$/u.exec(query)
+  if (match === null) return { query }
+  const line = Number(match[1])
+  if (!Number.isSafeInteger(line) || line < 1) return { query }
+  return { query: query.slice(0, match.index).trimEnd(), line }
+}
+
 /** Resolve a (possibly relative) search match against the session cwd. */
 export function resolveWorkspacePath(cwd: string | undefined, path: string): string {
   if (isAbsolutePath(path)) return path
@@ -362,8 +377,18 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
   const runSearch = (query: string): void => {
     const scope = currentScope()
     if (scope === undefined) return
+    // A `:120` suffix is a line jump, not search text — strip it before it
+    // reaches the matcher. A query that is ONLY a line suffix has nothing to
+    // search; show the recents list (Enter applies the jump to what opens).
+    const { query: searchText } = splitLineSuffix(query)
+    if (searchText === '') {
+      cancelSearch()
+      searchSeq += 1
+      store.set({ matches: loadRecents(), listKind: 'recents', truncated: false, selected: 0, searching: false, error: null })
+      return
+    }
     const scopeKey = scopeKeyOf(scope)
-    const needle = query.toLowerCase()
+    const needle = searchText.toLowerCase()
 
     // The incremental local filter that used to live here relied on substring
     // semantics: extending a query could only shrink a complete result set.
@@ -390,7 +415,7 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
       store.set({ searching: true, error: null, listKind: 'search' })
     }
 
-    fetchEntries(scope, query, controller.signal)
+    fetchEntries(scope, searchText, controller.signal)
       .then((found) => {
         if (seq !== searchSeq || controller.signal.aborted) return
         const complete = !found.truncated
@@ -485,7 +510,11 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
     // The empty-query list is the recent-files history, not search results:
     // completing from it would paste a path the user never searched for.
     if (state.listKind === 'recents') return
-    const trimmed = state.query.trim()
+    // A `:120` line suffix is not part of the completable token: strip it
+    // before the split and re-append it to the completed query, so Tab does
+    // not eat the jump.
+    const { query: trimmed, line } = splitLineSuffix(state.query.trim())
+    const lineSuffix = line === undefined ? '' : `:${line}`
 
     // Keep every earlier token; only the last one is being completed.
     const tokens = trimmed.split(/\s+/u).filter(token => token !== '')
@@ -510,7 +539,7 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
     }
 
     const prefixText = prefixMatch === null ? '' : prefixMatch[1]
-    const next = `${headText === '' ? '' : `${headText} `}${prefixText}${completed}`
+    const next = `${headText === '' ? '' : `${headText} `}${prefixText}${completed}${lineSuffix}`
     applyQuery(next)
   }
 
@@ -549,8 +578,16 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
     }
     // An extra-root row already carries an absolute path; joining it against
     // the cwd would produce nonsense like `E:\chaos\E:\wolfgang\...`.
+    //
+    // A `:120` suffix in the query becomes the navigation's line parameter —
+    // the built-in preview scrolls to and marks that line, loading pages up
+    // to it when the file is paged.
+    const line = splitLineSuffix(store.getSnapshot().query.trim()).line
     try {
-      service.openResource(fileAddressFor(scope.sessionId, scope.cwd, absolutePathOf(scope, entry)))
+      service.openResource(
+        fileAddressFor(scope.sessionId, scope.cwd, absolutePathOf(scope, entry)),
+        line === undefined ? undefined : { params: { line } },
+      )
     } catch (error) {
       // An address no registered tab type claims throws in the navigation
       // face; surface it instead of letting the overlay vanish silently.

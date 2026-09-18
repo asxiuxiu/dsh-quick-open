@@ -41,21 +41,25 @@ function escapeRegExp(text: string): string {
 }
 
 /**
- * Find every case-insensitive occurrence of `query` across `pieces`.
+ * Find every occurrence of `query` across `pieces`.
  *
  * Matching runs over the concatenation of all pieces so a phrase split
  * across two text nodes (a `<b>` boundary in rendered Markdown, a highlight
  * span in the code renderer) still matches; because each piece's `start` is
  * its offset in that same concatenation, the joined offsets map straight
- * back onto the pieces. A case-insensitive REGEXP (not a lowercased copy)
- * does the matching, so a character whose case folding changes its length
- * (ß, İ) cannot shift the offsets the ranges are built from. Spans are
- * returned in document order and capped at MATCH_LIMIT.
+ * back onto the pieces. A REGEXP (not a lowercased copy) does the matching,
+ * so a character whose case folding changes its length (ß, İ) cannot shift
+ * the offsets the ranges are built from. Spans are returned in document
+ * order and capped at MATCH_LIMIT.
  */
-export function matchSpans(pieces: readonly { start: number, text: string }[], query: string): MatchSpan[] {
+export function matchSpans(
+  pieces: readonly { start: number, text: string }[],
+  query: string,
+  caseSensitive = false,
+): MatchSpan[] {
   if (query === '') return []
   const joined = pieces.map(piece => piece.text).join('')
-  const pattern = new RegExp(escapeRegExp(query), 'giu')
+  const pattern = new RegExp(escapeRegExp(query), caseSensitive ? 'gu' : 'giu')
   const spans: MatchSpan[] = []
   for (;;) {
     const hit = pattern.exec(joined)

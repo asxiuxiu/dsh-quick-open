@@ -564,6 +564,21 @@ const textNode2 = { nodeType: 3, textContent: 'hello', parentElement: lineEl }
 domState.roots.push(fakeRoot)
 domState.textNodes.push(textNode1, textNode2)
 
+// A selection inside the preview when Ctrl+F lands must SEED the query
+// (VSCode's find discipline): the bar opens with the selection as its query.
+domState.selection = {
+  isCollapsed: false,
+  rangeCount: 1,
+  anchorNode: textNode1,
+  focusNode: textNode2,
+  toString: () => 'hello',
+  getRangeAt: () => ({
+    startContainer: textNode1,
+    getBoundingClientRect: () => ({ top: 100, left: 120, right: 160, bottom: 114, width: 40, height: 14, x: 120, y: 100 }),
+    cloneRange() { return this },
+  }),
+}
+
 const swallowed = fireKeydown({ key: 'f', ctrlKey: true })
 if (!swallowed.prevented) {
   fail('Ctrl+F was NOT claimed over a visible file preview')
@@ -582,6 +597,12 @@ if (bars.length === 0) {
   if (input === undefined) {
     fail('the find bar has no input to type into')
   } else {
+    // The query came from the selection, and the search already ran on it.
+    if (input.value !== 'hello') {
+      fail(`the find bar did not seed its query from the preview selection (value: ${JSON.stringify(input.value)})`)
+    } else {
+      ok('find bar seeds its query from the preview selection')
+    }
     // The input must take the caret ON MOUNT, via a callback ref. An effect
     // keyed on the open flag runs a frame too early — the bar renders only
     // after the tracking loop measures the anchor — so the caret never moved
@@ -606,16 +627,74 @@ if (bars.length === 0) {
     if (input?.onChange === undefined) {
       fail('the find bar input has no onChange')
     } else {
-    input.onChange({ target: { value: 'hello' } })
+    // The seeded query already produced its count: two hits in the stub text.
+    let text = collectText(el).join(' ')
+    if (!text.includes('1/2')) {
+      fail(`the seeded query produced no count (rendered: ${JSON.stringify(text.slice(0, 120))})`)
+    } else {
+      ok('find bar counts matches in the preview DOM (1/2)')
+    }
+
+    // The Aa toggle: 'Hello' is a hit while case-insensitive and none once
+    // case must match.
+    input.onChange({ target: { value: 'Hello' } })
     el = rerender()
     flushRaf(2)
     el = rerender()
-    const text = collectText(el).join(' ')
-    // 'hello world ' + 'hello' holds two hits; the bar reports "current/total".
-    if (!text.includes('1/2')) {
-      fail(`the find bar counted no matches over the preview's text nodes (rendered: ${JSON.stringify(text.slice(0, 120))})`)
+    const caseToggle = collectByProp(el, 'data-preview-find-case')[0]
+    if (caseToggle === undefined) {
+      fail('the find bar has no case-sensitivity toggle')
     } else {
-      ok('find bar counts matches in the preview DOM (1/2)')
+      caseToggle.onClick?.()
+      el = rerender()
+      flushRaf(2)
+      el = rerender()
+      text = collectText(el).join(' ')
+      if (!text.includes('无结果')) {
+        fail(`case-sensitive "Hello" still matched lowercase text (rendered: ${JSON.stringify(text.slice(0, 120))})`)
+      } else {
+        ok('the Aa toggle makes the search case-sensitive')
+      }
+      caseToggle.onClick?.()
+      el = rerender()
+      flushRaf(2)
+      el = rerender()
+      text = collectText(el).join(' ')
+      if (!text.includes('1/2')) {
+        fail('turning the Aa toggle back off did not restore case-insensitive matches')
+      } else {
+        ok('the Aa toggle restores case-insensitive matching')
+      }
+    }
+
+    // A preview with pages still to load must SAY the search covered a
+    // prefix — "no results" must never read as "not in the file".
+    const moreButton = elementStub('button')
+    fakeRoot.querySelector = selector => selector === '[data-textpreview-more]' ? moreButton : null
+    input.onChange({ target: { value: 'hell' } })
+    el = rerender()
+    flushRaf(2)
+    el = rerender()
+    if (collectByProp(el, 'data-preview-find-partial').length === 0) {
+      fail('a paged preview raised no "loaded part only" hint in the find bar')
+    } else {
+      ok('find bar flags a partially-loaded preview')
+    }
+    fakeRoot.querySelector = () => null
+
+    // Esc closes the bar from the PREVIEW, not only from the input — the
+    // reader clicked back into the file (which is not focusable), so the
+    // last-touched preview is what engages the gesture. The quick-open
+    // layer, when open, owns Esc instead.
+    for (const handler of log.documentListeners.mousedown ?? []) handler({ target: textNode1 })
+    const escaped = fireKeydown({ key: 'Escape' })
+    rerender()
+    flushRaf(2)
+    el = rerender()
+    if (!escaped.prevented || collectByProp(el, 'data-preview-find').length !== 0) {
+      fail('Esc over the preview did not close the find bar')
+    } else {
+      ok('Esc closes the find bar from the preview')
     }
     }
   }

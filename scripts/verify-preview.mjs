@@ -108,6 +108,16 @@ check('regexp metacharacters are literal',
 check('offsets survive case folding (ß)',
   matchSpans(piecesOf('straße STRASSE'), 'strasse'),
   [{ from: 7, to: 14 }])
+// The Aa toggle: case-sensitive matching must not fold.
+check('case-sensitive rejects a case mismatch',
+  matchSpans(piecesOf('Alpha alpha'), 'alpha', true),
+  [{ from: 6, to: 11 }])
+check('case-sensitive keeps an exact hit',
+  matchSpans(piecesOf('Alpha alpha'), 'Alpha', true),
+  [{ from: 0, to: 5 }])
+check('case-insensitive is still the default',
+  matchSpans(piecesOf('Alpha'), 'alpha').length,
+  1)
 check('matches cap at MATCH_LIMIT',
   matchSpans(piecesOf('ab'.repeat(MATCH_LIMIT + 10)), 'ab').length,
   MATCH_LIMIT)

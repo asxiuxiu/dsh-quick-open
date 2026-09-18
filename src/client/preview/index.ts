@@ -17,7 +17,7 @@ import type { Context } from '../types.ts'
 import { ensurePreviewStyles } from './styles.ts'
 import { PreviewAugmentations } from './Augmentations.tsx'
 
-export function registerPreviewAugmentations(ctx: Context): void {
+export function registerPreviewAugmentations(ctx: Context, isQuickOpenOpen: () => boolean): void {
   ensurePreviewStyles()
   ctx.effect(() => {
     if (typeof document === 'undefined') return undefined
@@ -27,7 +27,7 @@ export function registerPreviewAugmentations(ctx: Context): void {
     let root: Root | null = null
     try {
       root = createRoot(host)
-      root.render(createElement(PreviewAugmentations, { ctx }))
+      root.render(createElement(PreviewAugmentations, { ctx, isQuickOpenOpen }))
     } catch (error) {
       // A mount failure must not take the quick-open layer down with it:
       // without this layer the app simply has its stock preview.

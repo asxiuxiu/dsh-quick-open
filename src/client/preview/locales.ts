@@ -13,7 +13,10 @@ export interface PreviewMessages {
   findPrevious: string
   findNext: string
   findClose: string
+  findCaseSensitive: string
   noResults: string
+  partialCoverage: string
+  partialCoverageHint: string
 }
 
 const en: PreviewMessages = {
@@ -24,7 +27,10 @@ const en: PreviewMessages = {
   findPrevious: 'Previous match (Shift+Enter)',
   findNext: 'Next match (Enter)',
   findClose: 'Close (Esc)',
+  findCaseSensitive: 'Match case',
   noResults: 'No results',
+  partialCoverage: 'loaded part',
+  partialCoverageHint: 'The file has pages not yet loaded; only the loaded part was searched.',
 }
 
 const zh: PreviewMessages = {
@@ -35,7 +41,10 @@ const zh: PreviewMessages = {
   findPrevious: '上一个匹配（Shift+Enter）',
   findNext: '下一个匹配（Enter）',
   findClose: '关闭（Esc）',
+  findCaseSensitive: '区分大小写',
   noResults: '无结果',
+  partialCoverage: '仅已加载',
+  partialCoverageHint: '文件还有未加载的部分，搜索结果只覆盖已加载的内容。',
 }
 
 /**

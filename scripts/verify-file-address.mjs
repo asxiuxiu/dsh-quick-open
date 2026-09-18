@@ -11,7 +11,7 @@
  * row from an extra root (absolute, outside the workspace), a path with
  * spaces, a path with non-ASCII, and a Windows drive path.
  */
-import { fileAddressFor, fileMentionForTest as fileMention } from '../src/client/controller.ts'
+import { fileAddressFor, fileMentionForTest as fileMention, splitLineSuffix } from '../src/client/controller.ts'
 
 /** Decode a file address the way @deepseek-ai/dsh-client-ui-sidebar-documentpreview does. */
 function parseFileAddress(address) {
@@ -126,4 +126,32 @@ for (const testCase of mentions) {
 }
 
 console.log(mentionFailures === 0 ? `${mentions.length}/${mentions.length} mentions correct` : `${mentionFailures} MENTION FAILURES`)
-process.exit(failures + mentionFailures === 0 ? 0 : 1)
+
+// ── the `:line` goto suffix ─────────────────────────────────────────────────
+// A trailing `:120` is a line jump, not search text. The `dir:`/`file:` token
+// prefixes and Windows drive letters keep their colons; only a TRAILING
+// colon+digits splits.
+const lineCases = [
+  { query: 'main.cpp:120', expect: { query: 'main.cpp', line: 120 } },
+  { query: 'client main:7', expect: { query: 'client main', line: 7 } },
+  { query: 'main.cpp', expect: { query: 'main.cpp' } },
+  { query: 'file:main', expect: { query: 'file:main' } },
+  { query: 'E:/cb2/chaos', expect: { query: 'E:/cb2/chaos' } },
+  { query: 'main.cpp:0', expect: { query: 'main.cpp:0' } },
+  { query: 'main.cpp:12x', expect: { query: 'main.cpp:12x' } },
+  { query: ':42', expect: { query: '', line: 42 } },
+]
+
+let lineFailures = 0
+for (const testCase of lineCases) {
+  const actual = splitLineSuffix(testCase.query)
+  const ok = actual.query === testCase.expect.query && actual.line === testCase.expect.line
+  if (ok) console.log(`  ok   ${JSON.stringify(testCase.query)}`)
+  else {
+    lineFailures += 1
+    console.log(`  FAIL ${JSON.stringify(testCase.query)}\n       got ${JSON.stringify(actual)} want ${JSON.stringify(testCase.expect)}`)
+  }
+}
+
+console.log(lineFailures === 0 ? `${lineCases.length}/${lineCases.length} line-suffix splits correct` : `${lineFailures} LINE-SUFFIX FAILURES`)
+process.exit(failures + mentionFailures + lineFailures === 0 ? 0 : 1)

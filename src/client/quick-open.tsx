@@ -495,6 +495,7 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
           <span>↑↓ 导航</span>
           <span>Tab 补全路径</span>
           <span>Enter 打开</span>
+          <span>:行号 跳行</span>
           <span>Ctrl+Enter 加入对话（不关闭）</span>
           <span>dir: 限定目录</span>
           <span>file: 限定文件名</span>

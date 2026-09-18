@@ -25,6 +25,7 @@ import { createPortal } from 'react-dom'
 import { addressOfRoot, isVisible, lineOfNode, previewRootOf, visiblePreviews, type PreviewTarget } from './probe.ts'
 import { clearMatches, collectTextPieces, matchSpans, paintMatches, revealMatch, MATCH_LIMIT, type TextPiece, type MatchSpan } from './find.ts'
 import { appendToDraft, buildSelectionText, readSelectionFormat, SELECTION_FORMAT_KEY, type SelectionFormat } from './selection.ts'
+import { isImeComposition } from '../ime-guard.ts'
 import { t } from './locales.ts'
 import { previewCss } from './styles.ts'
 
@@ -51,6 +52,13 @@ function relativeTo(cwd: string | undefined, path: string): string {
   return normalized.startsWith(`${root}/`) ? normalized.slice(root.length + 1) : normalized
 }
 
+/** Whether a node sits inside this layer's own find bar. */
+function isInFindBar(node: Node | null | undefined): boolean {
+  if (node === null || node === undefined) return false
+  const element = node.nodeType === 1 ? node as Element : node.parentElement
+  return element?.closest('[data-preview-find]') != null
+}
+
 /** Keep a floating control reachable when its anchor sits against an edge. */
 const EDGE_MARGIN = 60
 
@@ -65,14 +73,42 @@ interface PendingSelection {
   top: number
 }
 
-export function PreviewAugmentations(props: { ctx?: PreviewContext }): ReturnType<typeof createElement> {
-  const { ctx } = props
+/** localStorage key for the find bar's case-sensitivity toggle. */
+const CASE_SENSITIVE_KEY = 'dsh-quick-open:find-case-sensitive'
+
+/** The persisted toggle; absent or unreadable means case-insensitive. */
+function readCaseSensitive(): boolean {
+  try {
+    return window.localStorage.getItem(CASE_SENSITIVE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+/** Persist the toggle; a storage failure must not break the bar. */
+function writeCaseSensitive(value: boolean): void {
+  try {
+    window.localStorage.setItem(CASE_SENSITIVE_KEY, value ? '1' : '0')
+  } catch {
+    // A full or blocked localStorage is not worth surfacing for a preference.
+  }
+}
+
+export function PreviewAugmentations(props: {
+  ctx?: PreviewContext
+  /** The quick-open layer owns Esc while it is open (it is the modal on top). */
+  isQuickOpenOpen?: () => boolean
+}): ReturnType<typeof createElement> {
+  const { ctx, isQuickOpenOpen } = props
 
   const [findOpen, setFindOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [matchTotal, setMatchTotal] = useState(0)
   const [current, setCurrent] = useState(0)
   const [barPos, setBarPos] = useState<{ left: number, top: number } | null>(null)
+  /** The target preview still has pages to load, so the search covers a prefix only. */
+  const [partial, setPartial] = useState(false)
+  const [caseSensitive, setCaseSensitiveState] = useState(() => readCaseSensitive())
   const [pending, setPending] = useState<PendingSelection | null>(null)
   const [notice, setNotice] = useState<{ text: string, left: number, top: number } | null>(null)
 
@@ -89,6 +125,7 @@ export function PreviewAugmentations(props: { ctx?: PreviewContext }): ReturnTyp
   const popupRangeRef = useRef<Range | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const popupButtonRef = useRef<HTMLButtonElement | null>(null)
+  const caseSensitiveRef = useRef(caseSensitive)
   /** The preview the reader last touched; the Ctrl+F target tie-breaker. */
   const touchedRootRef = useRef<HTMLElement | null>(null)
   const noticeTimerRef = useRef<number | undefined>(undefined)
@@ -97,6 +134,14 @@ export function PreviewAugmentations(props: { ctx?: PreviewContext }): ReturnTyp
   queryRef.current = query
   currentRef.current = current
   pendingRef.current = pending
+  caseSensitiveRef.current = caseSensitive
+
+  /** Persisted toggle: flip it, persist it, and re-run the search. */
+  const setCaseSensitive = useCallback((next: boolean) => {
+    writeCaseSensitive(next)
+    caseSensitiveRef.current = next
+    setCaseSensitiveState(next)
+  }, [])
 
   // The reference format is an app-wide preference (set in the settings
   // panel), read per gesture rather than passed down: this layer is mounted
@@ -130,6 +175,7 @@ export function PreviewAugmentations(props: { ctx?: PreviewContext }): ReturnTyp
     setCurrent(0)
     currentRef.current = 0
     setBarPos(null)
+    setPartial(false)
   }, [])
 
   /**
@@ -141,12 +187,16 @@ export function PreviewAugmentations(props: { ctx?: PreviewContext }): ReturnTyp
     const target = targetRef.current
     if (target === null || !document.contains(target.root)) return
     const pieces = collectTextPieces(target.root)
-    const spans = matchSpans(pieces, queryRef.current)
+    const spans = matchSpans(pieces, queryRef.current, caseSensitiveRef.current)
     searchRef.current = { pieces, spans }
     const clamped = spans.length === 0 ? 0 : Math.min(currentRef.current, spans.length - 1)
     currentRef.current = clamped
     setCurrent(clamped)
     setMatchTotal(spans.length)
+    // The preview loads pages lazily; while its "load more" affordance exists
+    // the search has covered a prefix only, and the bar must say so rather
+    // than let "no results" read as "not in the file".
+    setPartial(target.root.querySelector('[data-textpreview-more]') !== null)
     rangesRef.current = paintMatches(pieces, spans, clamped)
   }, [])
 
@@ -180,8 +230,26 @@ export function PreviewAugmentations(props: { ctx?: PreviewContext }): ReturnTyp
   // find while the reader is looking at a file, and the built-in preview's
   // scroll surface never claims the gesture itself. With NO visible preview
   // the key is left alone — the browser or app default is then correct.
+  //
+  // Esc is the mirror gesture: an open bar closes from wherever the caret is,
+  // provided the reader is engaged with THIS bar or its preview (the input,
+  // or the preview they last touched). The quick-open layer owns Esc while
+  // open, and a stranger's surface (the composer, a dialog) keeps its own.
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        if (!findOpenRef.current) return
+        if (isImeComposition(event)) return
+        if (isQuickOpenOpen?.() === true) return
+        const target = targetRef.current
+        const inBar = isInFindBar(document.activeElement)
+        const engaged = touchedRootRef.current !== null && target !== null && touchedRootRef.current === target.root
+        if (!inBar && !engaged) return
+        event.preventDefault()
+        event.stopPropagation()
+        closeFind()
+        return
+      }
       if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
       if (event.key !== 'f' && event.key !== 'F') return
       const target = findOpenRef.current ? targetRef.current : pickTarget()
@@ -195,11 +263,23 @@ export function PreviewAugmentations(props: { ctx?: PreviewContext }): ReturnTyp
       }
       targetRef.current = target
       findOpenRef.current = true
+      // Seed the query from the target's own selection, the way VSCode's find
+      // does: a single-line selection in the preview becomes the query. A
+      // preserved query stays when nothing is selected.
+      const selection = document.getSelection()
+      if (selection !== null && !selection.isCollapsed && selection.anchorNode !== null
+        && previewRootOf(selection.anchorNode) === target.root) {
+        const selected = selection.toString()
+        if (selected.trim() !== '' && !selected.includes('\n') && selected.length <= 200) {
+          queryRef.current = selected
+          setQuery(selected)
+        }
+      }
       setFindOpen(true)
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [pickTarget])
+  }, [pickTarget, closeFind, isQuickOpenOpen])
 
   // The bar takes the caret when its input MOUNTS. An effect keyed on
   // findOpen cannot do this: the bar renders only once the tracking loop has
@@ -216,11 +296,11 @@ export function PreviewAugmentations(props: { ctx?: PreviewContext }): ReturnTyp
     }
   }, [])
 
-  // Search whenever the bar opens or the query changes.
+  // Search whenever the bar opens, the query changes, or the case toggle flips.
   useEffect(() => {
     if (!findOpen) return
     runSearch()
-  }, [findOpen, query, runSearch])
+  }, [findOpen, query, caseSensitive, runSearch])
 
   // The preview loads pages lazily; new text arriving under an open bar must
   // join the search. Debounced: a page load mutates many nodes at once.
@@ -449,6 +529,19 @@ export function PreviewAugmentations(props: { ctx?: PreviewContext }): ReturnTyp
           className: previewCss.findCount,
           'data-empty': matchTotal === 0 ? 'true' : 'false',
         }, countLabel),
+        partial && query !== '' && createElement('span', {
+          className: previewCss.findPartial,
+          title: t('partialCoverageHint'),
+          'data-preview-find-partial': 'true',
+        }, t('partialCoverage')),
+        createElement('button', {
+          type: 'button',
+          className: previewCss.findButton,
+          'data-preview-find-case': 'true',
+          'aria-pressed': caseSensitive,
+          title: t('findCaseSensitive'),
+          onClick: () => setCaseSensitive(!caseSensitiveRef.current),
+        }, 'Aa'),
         createElement('button', {
           type: 'button',
           className: previewCss.findButton,
