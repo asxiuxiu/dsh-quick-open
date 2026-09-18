@@ -487,6 +487,73 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
     return probeIsDir(scope, absolutePathOf(scope, entry))
   }
 
+  /**
+   * Tab: complete the search box from the selected row.
+   *
+   * Completion is SEGMENT-WISE, which is what makes Tab useful for drilling
+   * into a tree rather than only for accepting a whole path:
+   *
+   * - A DIRECTORY row completes to that directory with a trailing '/', so
+   *   repeated Tab presses walk down the tree (`ui/` -> `ui/coherent/` -> …).
+   * - A FILE row completes to its full path, finishing the query.
+   *
+   * The completion must satisfy the SAME scope as the token it replaces:
+   * a `file:` token can only ever match a basename, so completing it with a
+   * full path would produce a query that matches nothing. That mistake is easy
+   * to make and silent, so the scope decides which text is written.
+   */
+  const completeSelected = (): void => {
+    const entry = selectedMatch()
+    if (entry === undefined) return
+    const state = store.getSnapshot()
+    // The empty-query list is the recent-files history, not search results:
+    // completing from it would paste a path the user never searched for.
+    if (state.listKind === 'recents') return
+    const trimmed = state.query.trim()
+
+    // Keep every earlier token; only the last one is being completed.
+    const tokens = trimmed.split(/\s+/u).filter(token => token !== '')
+    const lastToken = tokens[tokens.length - 1] ?? ''
+    const prefixMatch = /^(dir:|d:|file:|f:)/u.exec(lastToken)
+    const scope = prefixMatch === null
+      ? 'any'
+      : (prefixMatch[1].startsWith('f') ? 'name' : 'dir')
+    const head = tokens.slice(0, Math.max(0, tokens.length - 1))
+    const headText = head.filter(token => !/^(?:dir:|d:|file:|f:)$/u.test(token)).join(' ')
+
+    // What this row can be completed TO, given the token's scope.
+    const path = entry.path
+    const basename = path.slice(path.lastIndexOf('/') + 1)
+    let completed: string
+    if (scope === 'name') {
+      completed = basename
+    } else if (entry.isDir === true) {
+      completed = `${path.replace(/\/+$/, '')}/`
+    } else {
+      completed = path
+    }
+
+    const prefixText = prefixMatch === null ? '' : prefixMatch[1]
+    const next = `${headText === '' ? '' : `${headText} `}${prefixText}${completed}`
+    applyQuery(next)
+  }
+
+  /**
+   * Write the query and search immediately, bypassing the keystroke debounce:
+   * a completion should show its results at once, not 100ms later.
+   */
+  const applyQuery = (text: string): void => {
+    store.set({ query: text })
+    cancelSearch()
+    const trimmed = text.trim()
+    if (trimmed === '') {
+      searchSeq += 1
+      store.set({ matches: loadRecents(), listKind: 'recents', truncated: false, selected: 0, searching: false, error: null })
+      return
+    }
+    runSearch(trimmed)
+  }
+
   /** Enter: open the selected file in the sidebar editor, then close. */
   const openSelected = async (): Promise<void> => {
     const entry = selectedMatch()
@@ -596,6 +663,7 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
     move,
     select,
     jump,
+    completeSelected,
     openSelected,
     referenceSelected,
   }

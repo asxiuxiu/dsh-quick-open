@@ -40,6 +40,26 @@ export function apply(ctx: Context): void {
     return () => window.removeEventListener('keydown', onKey, true)
   }, 'dsh-quick-open: global Ctrl+P listener')
 
+  // Tab is claimed at window CAPTURE while the layer is open.
+  //
+  // DSH's conversation input treats Tab as focus traversal and handles it in
+  // the capture phase, which runs before any React handler on our panel — so
+  // handling Tab only in the layer's own onKeyDown would be too late and the
+  // key would move focus out of the search box instead of completing.
+  // Capture phase here mirrors the Ctrl+P listener and wins the race.
+  ctx.effect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== 'Tab') return
+      if (!controller.store.getSnapshot().open) return
+      if (isImeComposition(event)) return
+      event.preventDefault()
+      event.stopPropagation()
+      controller.completeSelected()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, 'dsh-quick-open: Tab completion while open')
+
   // Switching sessions closes the layer: its matches belong to the old cwd.
   ctx.effect(
     () => ctx.sessions.list.subscribe(() => controller.closeOnSessionChange()),

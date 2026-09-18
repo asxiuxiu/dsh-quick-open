@@ -75,6 +75,9 @@ const styles: Record<string, CSSProperties> = {
     gap: 8,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
+    // Rows are click targets, not text: a drag across one should not look like
+    // a selection. The text spans below opt back in.
+    userSelect: 'none',
   },
   rowSelected: {
     background: '#094771',
@@ -82,10 +85,12 @@ const styles: Record<string, CSSProperties> = {
   rowName: {
     color: '#e8e8e8',
     flexShrink: 0,
+    userSelect: 'text',
   },
   rowDirName: {
     color: '#4fc1ff',
     flexShrink: 0,
+    userSelect: 'text',
   },
   rowHit: {
     color: '#4ec9b0',
@@ -104,6 +109,7 @@ const styles: Record<string, CSSProperties> = {
     flexShrink: 1,
     minWidth: 0,
     overflow: 'hidden',
+    userSelect: 'text',
   },
   /** The elided leading portion of a path, dimmed to read as "omitted". */
   pathDim: {
@@ -349,10 +355,35 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
     }
   }
 
-  // mousedown would move keyboard focus out of the search input — prevent it
-  // everywhere inside the panel so the keyboard flow never breaks.
+  /**
+   * Stop a mousedown from moving keyboard focus OUT of the search input.
+   *
+   * Only the RESULT ROWS use this. It must not be applied to the whole panel:
+   * `preventDefault` on mousedown also suppresses native drag-selection, so
+   * blanketing the panel made it impossible to select text in the input with
+   * the mouse.
+   */
+  /**
+   * A row mousedown must not move keyboard focus out of the search input —
+   * otherwise the next keystroke goes nowhere. It must NOT blanket-block the
+   * default either, or dragging across a row's path could never select it.
+   *
+   * `user-select: none` on the row does the blocking for the row body, and
+   * this handler keeps focus. The row's TEXT spans opt back into selection
+   * (see `pathSelectable`), so a drag over the path still selects it and
+   * mousedown defaults are only prevented for the non-text parts.
+   */
   const keepFocus = (event: ReactMouseEvent): void => {
     event.preventDefault()
+  }
+
+  /**
+   * Backdrop mousedown: close only when the click really landed on the
+   * backdrop itself. `preventDefault` is deliberately NOT called here, so
+   * selecting text inside the panel still works.
+   */
+  const onBackdropMouseDown = (event: ReactMouseEvent): void => {
+    if (event.target === event.currentTarget) controller.close()
   }
 
   const onRowClick = (index: number, event: ReactMouseEvent): void => {
@@ -430,12 +461,11 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
   }
 
   return (
-    <div style={styles.backdrop} onMouseDown={keepFocus} onClick={() => controller.close()}>
+    <div style={styles.backdrop} onMouseDown={onBackdropMouseDown}>
       <div
         style={styles.panel}
         role="dialog"
         aria-label="快速打开文件"
-        onClick={(event) => event.stopPropagation()}
         onKeyDown={onKeyDown}
       >
         <input
@@ -451,9 +481,9 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
         {state.notice !== null && <div style={styles.notice}>{state.notice}</div>}
         <div style={styles.footer}>
           <span>↑↓ 导航</span>
+          <span>Tab 补全路径</span>
           <span>Enter 打开</span>
           <span>Ctrl+Enter 加入对话（不关闭）</span>
-          <span>空格分词</span>
           <span>dir: 限定目录</span>
           <span>file: 限定文件名</span>
           <span>Esc 关闭</span>
