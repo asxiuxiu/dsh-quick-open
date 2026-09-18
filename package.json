@@ -4,6 +4,25 @@
   "description": "DSH web plugin: VSCode-style Ctrl+P quick open — search workspace files with a fuzzy matcher, open them in the native right Sidebar, or drop a file reference into the conversation draft.",
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/asxiuxiu/dsh-quick-open.git"
+  },
+  "homepage": "https://github.com/asxiuxiu/dsh-quick-open#readme",
+  "bugs": {
+    "url": "https://github.com/asxiuxiu/dsh-quick-open/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "quick-open",
+    "fuzzy-search",
+    "ctrl-p"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
