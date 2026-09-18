@@ -1,9 +1,9 @@
 /**
  * Build script: two artifacts —
  *
- * 1. `lib/index.js`  (host half, ESM): a no-op cordis plugin. It exists so
- *    the profile Loader has a mountable row; dsh-client-modules discovers
- *    browser halves by scanning those rows.
+ * 1. `lib/index.js`  (host half, ESM): the `/quick-open/api` JSON API plus a
+ *    mountable cordis row. Host halves execute in Node at profile load (a
+ *    host change needs a DSH restart), so this is bundled for `node20`.
  *
  * 2. `lib/client.js` (browser half): bundled CJS wrapped in the module
  *    system's registration envelope —

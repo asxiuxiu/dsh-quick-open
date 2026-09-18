@@ -4,6 +4,12 @@
  * by the React layer through useSyncExternalStore.
  */
 
+/** A half-open [start, end) range within a path, for highlighting. */
+export interface MatchSpan {
+  start: number
+  end: number
+}
+
 /** One visible row: a workspace-relative path plus its kind when known
  *  (the indexed `/quick-open/api/search` route always knows; the legacy
  *  `fs.search` fallback and the recents list leave it undefined and actions
@@ -11,6 +17,25 @@
 export interface SearchEntry {
   path: string
   isDir?: boolean
+  /**
+   * The path is absolute because the entry came from an extra root (a
+   * directory outside the workspace, such as the sibling game repository).
+   * Such a path must never be joined against the session cwd.
+   */
+  absolute?: boolean
+  /** Extra-root label, shown as the row's dimmed prefix. */
+  rootLabel?: string
+  /**
+   * Matched spans of the basename, as offsets into the basename (not the
+   * path). Empty for the legacy route and the recents list, which do not
+   * score and therefore cannot report spans.
+   */
+  nameSpans?: MatchSpan[]
+  /**
+   * Matched spans in FULL-PATH coordinates that fall outside the basename —
+   * i.e. hits inside directory names. Only present for path queries.
+   */
+  dirSpans?: MatchSpan[]
 }
 
 export interface QuickOpenSnapshot {

@@ -21,6 +21,7 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import type { QuickOpenController } from './controller.ts'
+import type { MatchSpan } from './store.ts'
 import { isImeComposition } from './ime-guard.ts'
 
 const styles: Record<string, CSSProperties> = {
@@ -96,6 +97,14 @@ const styles: Record<string, CSSProperties> = {
     textOverflow: 'ellipsis',
     flex: 1,
   },
+  rowRoot: {
+    flexShrink: 0,
+    padding: '0 6px',
+    borderRadius: 3,
+    background: '#3a3d41',
+    color: '#bdbdbd',
+    fontSize: 11,
+  },
   rowAction: {
     flexShrink: 0,
     fontSize: 11,
@@ -140,19 +149,33 @@ function splitPath(rel: string): { dir: string; name: string } {
   return at === -1 ? { dir: '', name: rel } : { dir: rel.slice(0, at + 1), name: rel.slice(at + 1) }
 }
 
-/** Basename with the query substring highlighted (case-insensitive). */
-function highlightName(name: string, query: string): ReactNode {
-  const needle = query.trim().toLowerCase()
-  if (needle === '') return name
-  const at = name.toLowerCase().indexOf(needle)
-  if (at === -1) return name
-  return (
-    <>
-      {name.slice(0, at)}
-      <span style={styles.rowHit}>{name.slice(at, at + needle.length)}</span>
-      {name.slice(at + needle.length)}
-    </>
-  )
+/**
+ * Render `text` with the given spans emphasized. Spans are half-open offsets
+ * into `text`, already sorted and merged by the matcher; anything malformed is
+ * ignored rather than throwing, because a bad span must never blank a row.
+ */
+function highlight(text: string, spans: readonly MatchSpan[] | undefined): ReactNode {
+  if (spans === undefined || spans.length === 0) return text
+  const parts: ReactNode[] = []
+  let cursor = 0
+  for (const span of spans) {
+    const start = Math.max(0, Math.min(span.start, text.length))
+    const end = Math.max(start, Math.min(span.end, text.length))
+    if (start > cursor) parts.push(text.slice(cursor, start))
+    if (end > start) parts.push(<span key={start} style={styles.rowHit}>{text.slice(start, end)}</span>)
+    cursor = Math.max(cursor, end)
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor))
+  return parts
+}
+
+/**
+ * The dimmed directory prefix, with path-query hits highlighted. `dirSpans`
+ * are in full-path coordinates while this element renders only the prefix, so
+ * offsets are used as-is (they all precede the basename by construction).
+ */
+function highlightDir(dir: string, spans: readonly MatchSpan[] | undefined): ReactNode {
+  return highlight(dir, spans)
 }
 
 const PAGE_STEP = 10
@@ -289,11 +312,14 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
                 onMouseEnter={() => controller.select(index)}
                 onClick={(event) => onRowClick(index, event)}
               >
+                {entry.rootLabel !== undefined && (
+                  <span style={styles.rowRoot}>{entry.rootLabel}</span>
+                )}
                 <span style={entry.isDir === true ? styles.rowDirName : styles.rowName}>
-                  {highlightName(name, state.query)}
+                  {highlight(name, entry.nameSpans)}
                   {entry.isDir === true && '/'}
                 </span>
-                <span style={styles.rowDir}>{dir}</span>
+                <span style={styles.rowDir}>{highlightDir(dir, entry.dirSpans)}</span>
                 {selected && (
                   <button
                     type="button"
@@ -326,7 +352,7 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
           ref={inputRef}
           style={styles.input}
           value={state.query}
-          placeholder="按文件名搜索（Enter 打开，Ctrl+Enter 加入对话）"
+          placeholder="模糊搜索文件名；空格分隔多个关键词（如 index.html ui）"
           spellCheck={false}
           onChange={(event) => controller.setQuery(event.target.value)}
         />
@@ -337,6 +363,8 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
           <span>↑↓ 导航</span>
           <span>Enter 打开</span>
           <span>Ctrl+Enter 加入对话（不关闭）</span>
+          <span>空格分词</span>
+          <span>带 / 时匹配路径</span>
           <span>Esc 关闭</span>
           {state.truncated && <span>结果已截断，请细化关键词</span>}
           {state.indexInfo !== null && <span style={{ marginLeft: 'auto' }}>{state.indexInfo}</span>}

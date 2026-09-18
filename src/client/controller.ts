@@ -6,32 +6,39 @@
  *
  * Search pipeline, fastest path first:
  *
- * 1. INCREMENTAL FILTER — when the new query extends the last one and its
- *    result was complete (not truncated), substring semantics make the
- *    locally-filtered set EXACT: zero network, zero server CPU.
- * 2. QUERY CACHE — a small LRU of served results makes backspacing and
+ * 1. QUERY CACHE — a small LRU of served results makes backspacing and
  *    reopening the layer with a preserved query instant; a background
  *    revalidation still refreshes the list.
- * 3. INDEXED ROUTE — `/quick-open/api/search` (this plugin's own host half)
- *    answers from a per-workspace in-memory index (<10ms at 100k entries)
- *    and carries `isDir` on every row.
- * 4. LEGACY FALLBACK — dsh-better-sidebar's `fs.search` (full tree walk per
- *    keystroke, no isDir): used when the host half is unavailable, detected
- *    once per activation rather than retried per keystroke.
+ * 2. INDEXED ROUTE — `/quick-open/api/search` (this plugin's own host half)
+ *    answers from a per-workspace in-memory index with a fuzzy scorer, and
+ *    returns rows ALREADY RANKED together with the spans to highlight
+ *    (single-digit ms at 50k entries). The client must not re-rank these:
+ *    fuzzy matches are not substrings, and only the host has the index.
+ * 3. LEGACY FALLBACK — dsh-better-sidebar's `fs.search` (full tree walk per
+ *    keystroke, no isDir, no spans): used when the host half is unavailable,
+ *    detected once per activation rather than retried per keystroke. Rows from
+ *    this route carry no spans, so they render unhighlighted.
+ *
+ * The client-side incremental filter that used to sit in front of the network
+ * is gone: it relied on substring semantics (extending a query can only shrink
+ * a complete result set), which fuzzy matching does not satisfy.
  *
  * Interaction invariants enforced here:
  * - FOCUS: the search input owns keyboard focus for the layer's whole life.
- *   Any action that keeps the layer open (reference insert) bumps `focusSeq`
+ *   Any action that keeps the layer open (reference append) bumps `focusSeq`
  *   — twice, the second pass ~80ms later to win the race against the
- *   composer's own async focus on chip insert.
+ *   composer's own async focus when the draft is written.
  * - DIRECTORIES: rows whose kind is unknown (legacy route, recents) are
  *   probed via `/sidebar/api/fs.tree` on demand; indexed rows skip the
  *   probe. Files open in the sidebar editor; folders reference as `@dir/`.
+ * - REFERENCES: appended to the draft as plain text with exactly one
+ *   separating space (see `appendReferenceText` for why the chip path is not
+ *   usable from a plugin).
  * - RECENTS: an empty query shows the per-workspace recent list
  *   (localStorage), so Ctrl+P → Enter reopens the last file.
  */
 import type { BetterSidebarServiceLike, Context, SessionScope } from './types.ts'
-import type { QuickOpenStore, SearchEntry } from './store.ts'
+import type { MatchSpan, QuickOpenStore, SearchEntry } from './store.ts'
 
 /** Debounce before a keystroke becomes a search request (ms). */
 const SEARCH_DEBOUNCE_MS = 100
@@ -58,20 +65,23 @@ export function resolveWorkspacePath(cwd: string | undefined, path: string): str
   return `${base.replace(/[\\/]+$/, '')}${separator}${path}`
 }
 
+/** The row's absolute path: extra-root rows are already absolute. */
+function absolutePathOf(scope: SessionScope, entry: SearchEntry): string {
+  if (entry.absolute === true || isAbsolutePath(entry.path)) return entry.path
+  return resolveWorkspacePath(scope.cwd, entry.path)
+}
+
 /**
- * The DSH `@file` spelling for one relative path, mirroring the host grammar
+ * The DSH `@file` spelling for one path, mirroring the host grammar
  * (`formatFileMention` in @deepseek-ai/dsh-file-reference): plain when there
  * is no whitespace, quoted when there is; `undefined` when the path carries
  * a control character or quote the editor grammar cannot represent.
  */
-function fileMention(relativePath: string): { mention: string; label: string } | undefined {
+function fileMention(relativePath: string): string | undefined {
   const path = relativePath.replace(/[\\/]+$/, '')
   // eslint-disable-next-line no-control-regex -- rejecting control characters is the point
   if (/[\u0000-\u001f\u007f-\u009f\u0022]/u.test(path)) return undefined
-  const mention = /\s/u.test(path) ? `@"${path}"` : `@${path}`
-  const at = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
-  const label = at === -1 ? path : path.slice(at + 1)
-  return { mention, label }
+  return /\s/u.test(path) ? `@"${path}"` : `@${path}`
 }
 
 /** Shared POST helper for the `{ok:true,value}` JSON envelope both plugin APIs use. */
@@ -99,7 +109,14 @@ function scopePayload(scope: SessionScope, extra: Record<string, unknown>): Reco
 }
 
 interface IndexedSearchResult {
-  matches: { path: string; isDir: boolean }[]
+  matches: {
+    path: string
+    isDir: boolean
+    absolute?: boolean
+    rootLabel?: string
+    nameSpans?: MatchSpan[]
+    dirSpans?: MatchSpan[]
+  }[]
   truncated: boolean
   indexedEntries?: number
   indexAge?: number
@@ -114,7 +131,7 @@ interface LegacySearchResult {
  * Directory probe for rows whose kind the wire did not carry: `fs.tree`
  * lists one level and throws on a non-directory path, so success/failure is
  * the isDir signal. Any failure is treated as "file" so a probe hiccup never
- * blocks opening.
+ * blocks opening. Extra-root rows probe their absolute path.
  */
 async function probeIsDir(scope: SessionScope, relativePath: string): Promise<boolean> {
   try {
@@ -126,17 +143,16 @@ async function probeIsDir(scope: SessionScope, relativePath: string): Promise<bo
 }
 
 /**
- * Client-side re-rank of server matches: exact basename match first, then
- * basename prefix, then other basename hits, shorter paths winning ties.
- * Both routes match name-substrings only, so every row contains the query in
- * its basename.
+ * Legacy-route ordering: the `fs.search` fallback returns bare paths with no
+ * score, so a simple "exact basename > prefix > other, shorter path first"
+ * order is applied here. The indexed route needs none — the host already
+ * ranked those rows with the real scorer.
  */
 export function rankMatches(entries: SearchEntry[], query: string): SearchEntry[] {
   const needle = query.trim().toLowerCase()
   if (needle === '') return entries
   const score = (rel: string): number => {
-    const at = rel.lastIndexOf('/')
-    const name = (at === -1 ? rel : rel.slice(at + 1)).toLowerCase()
+    const name = nameLowerOf(rel)
     if (name === needle) return 0
     if (name.startsWith(needle)) return 1
     return 2
@@ -147,7 +163,7 @@ export function rankMatches(entries: SearchEntry[], query: string): SearchEntry[
     .map(item => item.entry)
 }
 
-/** Lowercase basename of a '/'-separated relative path (the match target). */
+/** Lowercase basename of a '/'-separated relative path. */
 function nameLowerOf(rel: string): string {
   const at = rel.lastIndexOf('/')
   return (at === -1 ? rel : rel.slice(at + 1)).toLowerCase()
@@ -164,8 +180,6 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
    * the activation (an abort is not a failure).
    */
   let fastRoute: boolean | undefined
-  /** The last served search: the incremental filter's exactness source. */
-  let lastServed: { scopeKey: string; needle: string; entries: SearchEntry[]; complete: boolean } | null = null
   /** Small LRU of served results by scope+query: instant backspace/reopen. */
   const queryCache = new Map<string, { entries: SearchEntry[]; complete: boolean }>()
 
@@ -197,6 +211,13 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
     return cwd === undefined ? undefined : `dsh-quick-open:recents:${cwd}`
   }
 
+  /**
+   * Recents persist as `{path, a?, l?}` objects rather than bare strings: a
+   * row from an extra root must keep its `absolute` flag, otherwise reloading
+   * the history would turn an absolute path back into a "workspace-relative"
+   * one and every later action on it would resolve against the wrong cwd.
+   * Plain strings are still read (older entries).
+   */
   const loadRecents = (): SearchEntry[] => {
     const key = recentsKey()
     if (key === undefined) return []
@@ -204,27 +225,45 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
       const raw = window.localStorage.getItem(key)
       if (raw === null) return []
       const parsed: unknown = JSON.parse(raw)
-      return Array.isArray(parsed)
-        ? parsed.filter((x): x is string => typeof x === 'string').map(path => ({ path }))
-        : []
+      if (!Array.isArray(parsed)) return []
+      const out: SearchEntry[] = []
+      for (const item of parsed) {
+        if (typeof item === 'string') {
+          out.push({ path: item })
+          continue
+        }
+        if (typeof item !== 'object' || item === null) continue
+        const record = item as Record<string, unknown>
+        if (typeof record.path !== 'string' || record.path === '') continue
+        out.push({
+          path: record.path,
+          ...(record.absolute === true ? { absolute: true } : {}),
+          ...(typeof record.label === 'string' && record.label !== '' ? { rootLabel: record.label } : {}),
+        })
+      }
+      return out
     } catch {
       return []
     }
   }
 
-  const pushRecent = (rel: string): void => {
+  const pushRecent = (entry: SearchEntry): void => {
     const key = recentsKey()
     if (key === undefined) return
-    const paths = [rel, ...loadRecents().map(e => e.path).filter(x => x !== rel)].slice(0, RECENTS_CAP)
+    const rest = loadRecents().filter(item => item.path !== entry.path)
+    const next = [entry, ...rest].slice(0, RECENTS_CAP)
+    const serialized = next.map(item => (item.absolute === true
+      ? { path: item.path, absolute: true, ...(item.rootLabel !== undefined ? { label: item.rootLabel } : {}) }
+      : item.path))
     try {
-      window.localStorage.setItem(key, JSON.stringify(paths))
+      window.localStorage.setItem(key, JSON.stringify(serialized))
     } catch {
       // storage full / private mode: history is best-effort
     }
     // Keep the visible list in sync when it is showing recents.
     const state = store.getSnapshot()
     if (state.open && state.listKind === 'recents') {
-      store.set({ matches: paths.map(path => ({ path })), selected: 0 })
+      store.set({ matches: next, selected: 0 })
     }
   }
 
@@ -328,7 +367,7 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
     }
     const legacy = await apiCall<LegacySearchResult>('/sidebar/api', 'fs.search', scopePayload(scope, { query }), signal)
     return {
-      entries: legacy.matches.map(path => ({ path })),
+      entries: rankMatches(legacy.matches.map(path => ({ path })), query),
       truncated: legacy.truncated,
       indexInfo: null,
     }
@@ -350,33 +389,11 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
     const scopeKey = scopeKeyOf(scope)
     const needle = query.toLowerCase()
 
-    // 1. Incremental filter: extending a complete result is exact under
-    //    substring semantics — answer locally, skip the network entirely.
-    if (
-      lastServed !== null
-      && lastServed.complete
-      && lastServed.scopeKey === scopeKey
-      && lastServed.needle !== ''
-      && needle.startsWith(lastServed.needle)
-      && needle !== lastServed.needle
-    ) {
-      const filtered = lastServed.entries.filter(entry => nameLowerOf(entry.path).includes(needle))
-      const ranked = rankMatches(filtered, query)
-      lastServed = { scopeKey, needle, entries: ranked, complete: true }
-      cachePut(`${scopeKey}\n${needle}`, { entries: ranked, complete: true })
-      cancelSearch()
-      searchSeq += 1
-      store.set({
-        searching: false,
-        matches: ranked,
-        truncated: false,
-        selected: 0,
-        error: null,
-        listKind: 'search',
-      })
-      return
-    }
-
+    // The incremental local filter that used to live here relied on substring
+    // semantics: extending a query could only shrink a complete result set.
+    // Fuzzy matching breaks that invariant — a longer query can match entries
+    // the shorter one rejected (and vice versa) — so every query now goes to
+    // the host, which is fast enough (single-digit ms) to make that a non-issue.
     cancelSearch()
     const seq = ++searchSeq
     const controller = new AbortController()
@@ -400,13 +417,11 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
     fetchEntries(scope, query, controller.signal)
       .then((found) => {
         if (seq !== searchSeq || controller.signal.aborted) return
-        const ranked = rankMatches(found.entries, query)
         const complete = !found.truncated
-        lastServed = { scopeKey, needle, entries: ranked, complete }
-        cachePut(`${scopeKey}\n${needle}`, { entries: ranked, complete })
+        cachePut(`${scopeKey}\n${needle}`, { entries: found.entries, complete })
         store.set({
           searching: false,
-          matches: ranked,
+          matches: found.entries,
           truncated: found.truncated,
           selected: 0,
           error: null,
@@ -466,7 +481,10 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
   /** The row's kind, probing only when the wire did not carry it. */
   const resolveIsDir = (scope: SessionScope, entry: SearchEntry): Promise<boolean> => {
     if (entry.isDir !== undefined) return Promise.resolve(entry.isDir)
-    return probeIsDir(scope, entry.path)
+    // The indexed route always carries isDir; a probe only happens for the
+    // legacy `fs.search` fallback and the recents list. Those rows may still
+    // be extra-root files, so probe their absolute path.
+    return probeIsDir(scope, absolutePathOf(scope, entry))
   }
 
   /** Enter: open the selected file in the sidebar editor, then close. */
@@ -486,28 +504,47 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
       reclaimFocus()
       return
     }
-    service.openFile(scope, resolveWorkspacePath(scope.cwd, entry.path))
-    pushRecent(entry.path)
+    // An extra-root row already carries an absolute path; joining it against
+    // the cwd would produce nonsense like `E:\chaos\E:\wolfgang\...`.
+    service.openFile(scope, absolutePathOf(scope, entry))
+    pushRecent(entry)
     close()
   }
 
   /** Append plain mention text at the end of the conversation draft. */
-  const appendMentionText = (sessionId: string, mention: string): boolean => {
+  /**
+   * Append one reference to the end of the conversation draft as PLAIN TEXT,
+   * guaranteeing exactly one separating space.
+   *
+   * Why not the chip path (`slash/input-insert-reference`): that event's `span`
+   * is in DETECT coordinates, where a chip occupies a single U+FFFC character,
+   * while the public `draft` string is the CLIPBOARD projection, where the same
+   * chip expands to its full `@path` text. Feeding a clipboard-derived offset
+   * into a detect-coordinate splice overruns the document — `selectSpan` maps
+   * nothing, the edit silently fails, and successive inserts end up jammed
+   * together with the spacing lost. Detect offsets are not exposed on the
+   * public input face, so there is no correct chip-path span to compute.
+   * Plain text is fully under our control and is what a chip serializes to
+   * anyway (`clipboardText` === the mention).
+   */
+  const appendReferenceText = (sessionId: string, mention: string): boolean => {
     const actx = ctx.sessions.scope(sessionId)
     const conversation = ctx.get('conversation')
     if (actx === undefined || conversation === undefined) return false
     const input = conversation.input.for(actx)
     const draft = input.state.getSnapshot().draft
-    input.setDraft(draft.trim() === '' ? mention : `${draft} ${mention}`)
+    // Exactly one space between references: append to a non-empty draft, but
+    // never double up when the user already left trailing whitespace.
+    const trimmed = draft.replace(/\s+$/u, '')
+    input.setDraft(trimmed === '' ? mention : `${trimmed} ${mention}`)
     return true
   }
 
   /**
-   * Ctrl+Enter: insert the selected match into the conversation draft and
-   * KEEP the layer open so several references can stack. Files insert as a
-   * structured chip (the native `@` picker's `slash/input-insert-reference`
-   * event, plain-text fallback); directories append the `@dir/` folder
-   * mention as plain text so folder completion keeps working.
+   * Ctrl+Enter: append the selected match to the conversation draft and KEEP
+   * the layer open so several references can stack. Both files and folders go
+   * in as plain `@`-mention text through `appendReferenceText` — see that
+   * function for why the chip path is unusable here.
    */
   const referenceSelected = async (): Promise<void> => {
     const entry = selectedMatch()
@@ -515,11 +552,16 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
     const scope = currentScope()
     if (scope === undefined) return
 
+    // An extra-root row is referenced by ABSOLUTE path: the workspace-relative
+    // spelling does not exist for a file outside the workspace, and DSH's file
+    // grammar resolves any absolute path regardless of cwd.
+    const referencePath = absolutePathOf(scope, entry)
+
     if (await resolveIsDir(scope, entry)) {
-      const mention = `@${entry.path.replace(/[\\/]+$/, '')}/`
-      if (appendMentionText(scope.sessionId, mention)) {
-        pushRecent(entry.path)
-        notice(`已加入对话 ${mention}`)
+      // A directory keeps its trailing slash so folder completion still works.
+      const mention = `@${referencePath.replace(/[\\/]+$/, '')}/`
+      if (appendReferenceText(scope.sessionId, mention)) {
+        pushRecent(entry)
       } else {
         notice('对话服务不可用')
       }
@@ -527,54 +569,19 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
       return
     }
 
-    const reference = fileMention(entry.path)
+    const reference = fileMention(referencePath)
     if (reference === undefined) {
       notice('路径包含无法引用的字符')
       reclaimFocus()
       return
     }
-    const actx = ctx.sessions.scope(scope.sessionId)
-    const conversation = ctx.get('conversation')
-    if (actx === undefined || conversation === undefined) {
+    if (appendReferenceText(scope.sessionId, reference)) {
+      pushRecent(entry)
+    } else {
       notice('对话服务不可用')
-      reclaimFocus()
-      return
     }
-    const input = conversation.input.for(actx)
-    const before = input.state.getSnapshot()
-    let inserted = false
-    if (before.draftRev !== undefined) {
-      try {
-        // The session-scope Context's typed emit is keyed to DSH's closed
-        // event map; this internal composer event is deliberately
-        // string-loose at runtime (same escape hatch better-sidebar uses).
-        actx.emit('slash/input-insert-reference', {
-          reference: {
-            source: 'reference',
-            ref: reference.mention,
-            label: reference.label,
-            appearance: 'file',
-            clipboardText: reference.mention,
-          },
-          span: {
-            draftRev: before.draftRev,
-            start: before.draft.length,
-            end: before.draft.length,
-          },
-        })
-        inserted = input.state.getSnapshot().draftRev !== before.draftRev
-      } catch {
-        inserted = false
-      }
-    }
-    if (!inserted) {
-      const draft = before.draft
-      input.setDraft(draft.trim() === '' ? reference.mention : `${draft} ${reference.mention}`)
-    }
-    pushRecent(entry.path)
-    notice(`已加入对话 ${reference.mention}`)
-    // The composer grabbed focus while minting the chip — take it back so
-    // the next keystroke still goes to the search box.
+    // The composer grabbed focus while appending — take it back so the next
+    // keystroke still goes to the search box.
     reclaimFocus()
   }
 

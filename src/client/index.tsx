@@ -13,6 +13,7 @@ import type { Context } from './types.ts'
 import { createQuickOpenStore } from './store.ts'
 import { createQuickOpenController } from './controller.ts'
 import { QuickOpenLayer } from './quick-open.tsx'
+import { QuickOpenSettings, quickOpenSettingsSection } from './settings.tsx'
 import { isImeComposition } from './ime-guard.ts'
 
 /** Services required before mounting (provided by the client runtime). */
@@ -54,6 +55,16 @@ export function apply(ctx: Context): void {
         order: 10,
       },
       () => createElement(QuickOpenLayer, { controller }),
+    ),
+  )
+
+  // Settings panel: per-workspace index rules (exclude/include dirs, file
+  // filters). Registered unconditionally — the panel itself degrades to a
+  // read-only notice when no session supplies a workspace to edit.
+  ctx.slots.inject('settings.section', () =>
+    ctx.slots.register(
+      quickOpenSettingsSection,
+      () => createElement(QuickOpenSettings, { ctx }),
     ),
   )
 }
