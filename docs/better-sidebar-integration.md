@@ -46,9 +46,9 @@ openFile(scope, path)          // 在侧边栏打开文件
 
 ---
 
-## 二、dsh-quick-open 与 better-sidebar 的耦合
+## 二、dsh-quick-open 与 better-sidebar 的耦合（已解除）
 
-全插件只有一个耦合点，位于 `src/client/controller.ts` 的 `sidebar()`：
+调研时全插件只有一个耦合点，位于 `src/client/controller.ts` 的 `sidebar()`：
 
 ```ts
 const service = ctx.get('betterSidebar')
@@ -56,13 +56,19 @@ if (service === undefined || !service.features.includes('openFile')) return unde
 return service
 ```
 
-只在 `openSelected()` 一处使用。`package.json` 的 `inject` 不含它，属可选依赖。
+**该耦合已按「本插件不应知道 better-sidebar 存在」的要求移除**，改为 DSH 原生
+`ctx.sidebarRight.openResource()`（由 `@deepseek-ai/dsh-client-ui-sidebar-right` 提供，
+随 DSH 发行）。同时移除两条指向 `/sidebar/api` 的调用：`fs.search` 降级路径，以及
+`fs.tree` 目录探测（后者由本插件 host 半新增的 `quick-open/api/probe` 取代）。
 
 | 功能 | 是否依赖 | 通道 |
 |---|---|---|
-| 搜索（Ctrl+P） | 否 | 自有 host 路由，降级 `fs.search` |
-| 引用到会话（Ctrl+Enter） | 否 | `ctx.get('conversation')` |
-| 打开文件（Enter） | **是** | `ctx.betterSidebar.openFile()`，缺失时仅提示不崩 |
+| 搜索（Ctrl+P） | 否 | 自有 host 路由 |
+| 引用到会话（Ctrl+Enter） | 否 | `ctx.get('conversation')`，DSH 原生 |
+| 打开文件（Enter） | 否（已解耦） | `ctx.sidebarRight.openResource()`，DSH 原生 |
+
+native surface 的 `openResource` 要求目标 session 的右侧栏已挂载（adopted）：未挂载时
+打开会被静默丢弃（上游 issue #694）。此限制对原生注册表的所有使用者一致，非改道引入。
 
 ---
 
