@@ -31,7 +31,9 @@ DSH Web GUI 插件：VSCode 式 `Ctrl+P` 快速打开，**索引级搜索性能 
 | 平局 | 命中越紧凑优先（跨度过大者降级），再由路径长度兜底——保证结果顺序稳定 |
 | 门槛 | 查询片必须是目标的子序列才进入矩阵打分（保守预筛，不会漏掉真实命中） |
 
-**已知边界**：`index.html ui` 这种「无分隔符、想让 `ui` 去匹配目录段」的写法**不保证**把 `ui/` 目录的结果排到最前——`ui` 本身就是 `..._observer_index.html` 的合法子序列，算法无法知道你想指的是目录。要按目录筛选请**带上 `/`**（`ui/index.html`），这与 VSCode 行为一致。硬要支持「无分隔符自动猜目录」会把 5 万条目的查询从 7ms 推到 76–129ms，且因为那些文件名命中是真实的而依然排不对。
+**已知边界**：`index.html ui` 这种「无分隔符、想让 `ui` 去匹配目录段」的写法**不保证**把 `ui/` 目录的结果排到最前——`ui` 本身就是 `..._observer_index.html` 的合法子序列，算法无法知道你想指的是目录。要按目录筛选请**带上 `/`**（`ui/index.html`），这与 VSCode 行为一致。
+
+> 该边界已做过完整可行性评估（体积 + 准确率实测），结论是**不做自动目录筛选**：机制能让 `index.html bag` 从 0 结果变正确，但会把 `game_scene lua`、`client module`、`material ast` 三个原本正确的查询劫持到错误结果。根因是 `lua`/`module`/`ast` 这类词**既是真实目录名又是常见文件名片段**——2,801 个目录名里只有 3 个不出现在任何 basename 中（`module` 有 4 个目录却出现在 539 个 basename 里），不存在可用的判定阈值。数据与各结构体积对比见 `docs/dir-filter-evaluation.md`。
 
 ## 索引规则（每工作区一份）
 
@@ -152,7 +154,9 @@ dsh plugin --profile web add link:D:/dev/dsh-quick-open   # 本地开发
 npm install
 npm run build       # 产出 lib/index.js（host：索引搜索路由）+ lib/client.js（__ModuleLoader__ 封装）
 npm run typecheck
-node scripts/verify.mjs   # 用真实工作区索引跑匹配回归（需先按脚本内路径配置工作区）
+node scripts/verify.mjs            # 用真实工作区索引跑匹配回归（需先按脚本内路径配置工作区）
+node --expose-gc scripts/eval-cost.mjs     # 索引体积基线 + 候选结构代价
+node scripts/eval-ambiguity.mjs            # 目录名歧义量化
 ```
 
 ## 架构
@@ -170,6 +174,7 @@ src/client/store.ts     每激活一份的状态存储（useSyncExternalStore）
 src/client/ime-guard.ts IME 组词判据（isComposing + keyCode 229，DSH core 约定）
 src/client/types.ts     最小服务契约类型（slots / sessions / conversation / betterSidebar）
 docs/matching-research.md 匹配方案调研：VSCode/fzf/fzy 源码结论 + 8 种设计的实测对比与负结果
+docs/dir-filter-evaluation.md 目录筛选可行性评估：索引体积实测 + 目录名歧义量化（结论：不做自动筛选）
 ```
 
 ## 路线图（可拓展方向）
@@ -177,7 +182,7 @@ docs/matching-research.md 匹配方案调研：VSCode/fzf/fzy 源码结论 + 8 �
 按「价值 / 成本」排序：
 
 1. **文件预览窗格**：导航时右侧显示选中文件的前 N 行（`fs.read` 路由已有，需处理二进制与大文件）——类 VSCode peek
-2. **无分隔符的目录筛选**：`index.html ui` 直接按目录收敛（需索引期预计算 + 子串预筛把性能压回 20ms 内，见「搜索匹配」的已知边界）
+2. **目录筛选的显式语法**：加 `dir:ui index.html` 这类前缀修饰符，把任意词标记为「只筛目录」。**零索引体积、零默认行为改动**，且语义无歧义——是「自动目录筛选」被否决后的替代方案（见 `docs/dir-filter-evaluation.md`）
 3. **拼音/首字母匹配**：中文文件名用拼音检索（索引已在内存，客户端加分词映射即可，成本中等）
 4. **多选批量引用**：`Ctrl+Space` 标记多行，一次 `Ctrl+Enter` 全部加入对话
 5. **`fs.watch` 精准失效**：替代/补充 TTL，索引实时跟随文件变更（Windows 支持递归 watch，Linux 需逐目录——跨平台取舍）
