@@ -29,7 +29,7 @@
 | 模糊找文件 | 直接输入，如 `clntmod` 命中 `client_module.cpp` |
 | 按目录定位 | `ui/index.html`（逐段锚定，不会拼假命中） |
 | 跳到指定行 | `main.cpp:120`（内置预览自动滚动并高亮该行） |
-| 精确限定范围 | `dir:ui index.html`、`file:main.cpp`（简写 `d:` / `f:`） |
+| 精确限定范围 | `dir:ui index.html`（ui 必须是目录段）、`file:index.html`（只匹配文件名），简写 `d:` / `f:`，见下节 |
 | 重开上次文件 | `Ctrl+P` → `Enter`（空查询显示最近使用） |
 | 目录逐级下钻 | `Tab` 补全，目录带 `/` 可连续按 |
 | 引用进会话 | `Ctrl+Enter` 或点行尾「+ 引用」，**不关闭浮层**，可连续添加 |
@@ -38,6 +38,32 @@
 - 匹配字符逐段高亮；深路径的目录部分**前置省略**，永远保住区分结果的那段
 - 每工作区索引规则可配（设置页）：排除目录、强制包含生成目录、后缀白名单、是否索引目录
 - footer 常驻索引透明度（条目数 · 新鲜度）与键位提示
+
+#### 🎯 `dir:` 与 `file:` —— 限定这段文字该匹配哪里
+
+一个查询由空格切成若干片段，每个片段可以用前缀限定**它在路径的哪一部分才算命中**：
+
+| 写法 | 含义 | 例子 |
+|---|---|---|
+| `dir:ui` | 必须命中**某个目录段**，文件名不算 | `.../ui/coherent/bag/index.html` ✓<br>`ui_helpers.cpp`（只是文件名带 ui）✗ |
+| `file:main.cpp` | 必须命中**文件名**，目录不算 | `.../camera/main.cpp` ✓<br>`.../main.cpp/helper.txt` ✗ |
+| `d:` / `f:` | 同上，简写 | `d:ui f:index.html` |
+| 无前缀 | 文件名优先，路径查询时回退到整条路径 | `clntmod`、`ui/index.html` |
+
+可以混用，每个片段各管各的：
+
+```
+dir:camera file:manager      目录里有 camera 段，且文件名含 manager
+dir:client cpp               client 必须是目录段，cpp 照常模糊匹配文件名
+```
+
+两个要点，实测确认：
+
+- **匹配位置会如实高亮**。`dir:camera` 只高亮路径里的 `camera/`，文件名一个字母都不亮；`file:camera` 反之。看高亮就知道哪个片段命中了哪里。
+- **`dir:` 要求目录名连续出现，`file:` 允许缩写**。这是刻意的不对称：目录是靠打出名字来点的（`dir:camera` 不会命中 `.../chaos_client_camera_effect_manager.cpp` 这种只是文件名带 camera 的），而文件名往往靠缩写抵达（`file:clntmod` 能命中 `client_module.cpp`）。
+  所以 **`dir:clntmod` 找不到东西是正常的**——没有哪个目录段连续包含这串字母。想缩写找文件就用 `file:` 或不带前缀。
+
+不写前缀时，`dir:` / `file:` 的行为完全不变：`clntmod`、`ui/index.html`、`main.cpp:120` 都照旧。
 
 #### 📦 外置文件夹索引（`extraRoots`）
 
