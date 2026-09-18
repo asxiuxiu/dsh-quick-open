@@ -498,14 +498,16 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
   }
 
   /**
-   * Tab: complete the search box from the selected row, and — when that row
-   * is the only match — start browsing the directory it lands on.
+   * Tab: complete the search box from the selected row, and start browsing the
+   * directory when that row is a directory.
    *
-   * Completion is SEGMENT-WISE, which is what makes Tab useful for drilling
-   * into a tree rather than only for accepting a whole path:
+   * Completion is SEGMENT-WISE, which is what lets Tab walk a tree rather than
+   * only accept a whole path:
    *
-   * - A DIRECTORY row completes to that directory with a trailing '/', so
-   *   repeated Tab presses walk down the tree (`ui/` -> `ui/coherent/` -> …).
+   * - A DIRECTORY row completes to that directory (with a trailing '/') AND
+   *   switches the list to its direct children, so repeated Tab presses walk
+   *   down the tree (`docs/` -> `docs/camera/` -> …) while always showing what
+   *   is actually inside the directory you are standing in.
    * - A FILE row completes to its full path, finishing the query.
    *
    * The completion must satisfy the SAME scope as the token it replaces:
@@ -513,12 +515,10 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
    * full path would produce a query that matches nothing. That mistake is easy
    * to make and silent, so the scope decides which text is written.
    *
-   * DRILL-DOWN: when the completed row is a directory and it was the ONLY
-   * match, the list switches to that directory's direct children instead of
-   * re-running the search. A search for `ui/` answers "what matches those
-   * letters anywhere"; what the user who just Tabbed wants is "what is in
-   * here", which is containment and needs the `children` route. Typing any
-   * further character returns to normal fuzzy search (see `setQuery`).
+   * DRILL-DOWN: a search answers "what matches these letters anywhere"; the
+   * person who just Tabbed wants "what is in here", which is containment and
+   * needs the `children` route. Typing any further character returns to normal
+   * fuzzy search (see `setQuery`).
    */
   const completeSelected = (): void => {
     const entry = selectedMatch()
@@ -558,16 +558,25 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
     const prefixText = prefixMatch === null ? '' : prefixMatch[1]
     const next = `${headText === '' ? '' : `${headText} `}${prefixText}${completed}${lineSuffix}`
 
-    // Drill in only when the directory is the whole answer: with several
-    // matches the user is still choosing, and replacing their result list
-    // with a directory's contents would hide the choice they were making.
+    // Drill in whenever the completed row is a directory: Tab on a specific
+    // row IS the commitment, so there is nothing left to disambiguate.
     //
-    // Already in `drill` mode the user IS browsing, so the same Tab means
-    // "descend into the highlighted folder" without the one-match condition —
-    // that is the level-by-level walk, and every row in the list is by
-    // definition inside the directory being browsed.
+    // This replaced a `matches.length === 1` test, which asked the wrong
+    // question and broke both of the ways a directory actually shows up:
+    //
+    //   - `docs` matching two directories (the workspace's own `docs` and an
+    //     extra root's `.../proven_ground/_source/docs`) gave two rows, so the
+    //     test refused and Tab merely rewrote the text — leaving the user
+    //     staring at the same two candidates they had just chosen between.
+    //   - `docs/action-refactor/` gave two rows for ONE directory, because a
+    //     file inside it (`docs/action-refactor/03-save-action-refactor.md`)
+    //     matches too. Rows that are files INSIDE the target are not competing
+    //     candidates; they are evidence the user is in the right place.
+    //
+    // The selected row already says which directory is meant, so the drill
+    // goes there regardless of how many other rows the query also matched.
     const drillable = entry.isDir === true && scope !== 'name' && lineSuffix === ''
-    if (drillable && (state.listKind === 'drill' || (state.listKind === 'search' && state.matches.length === 1))) {
+    if (drillable) {
       // Write the completed query WITHOUT starting a search: the drill-in
       // request is the one that fills the list, and letting the search race it
       // would show the directory's matches for a frame before the children

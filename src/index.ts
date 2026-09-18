@@ -587,18 +587,26 @@ function queryIndex(entries: readonly IndexEntry[], query: string, maxMatches: n
  * anywhere, not the entries whose parent IS `ui`. So the Tab drill-down needs
  * containment, and containment is a prefix test over the same index.
  *
- * `prefix` is a workspace-relative directory path with no trailing slash (an
- * empty string means the workspace root). A child is an entry whose path
- * starts with `prefix/` and contains no further separator after it.
+ * `prefix` is a workspace-relative directory path; a leading or trailing slash
+ * is tolerated (`/docs/` and `docs` are the same directory), and an empty
+ * string means the workspace root. A child is an entry whose path starts with
+ * `prefix/` and contains no further separator after it.
+ *
+ * Normalizing matters: entries are stored WITHOUT a trailing slash, so a
+ * prefix that kept one built the head `docs/action-refactor//` and matched
+ * nothing — a silently EMPTY listing for a directory that plainly has files in
+ * it. That reads as a broken feature rather than as a bad argument, so the
+ * normalization lives here rather than being a caller obligation.
  *
  * Children are returned directories-first, then case-insensitively by name,
  * which is the order a file tree uses and the order a reader scans.
  */
 function listChildren(
   entries: readonly IndexEntry[],
-  prefix: string,
+  rawPrefix: string,
   maxResults: number,
 ): { matches: MatchRow[]; truncated: boolean } {
+  const prefix = rawPrefix.replace(/^\/+|\/+$/gu, '')
   const head = prefix === '' ? '' : `${prefix}/`
   const byPath = new Map<string, IndexEntry>()
   for (const entry of entries) {
