@@ -206,6 +206,47 @@ function scoreFuzzy(
 }
 
 /**
+ * The directory segment that best satisfies `needle`, or undefined when no
+ * single segment can.
+ *
+ * A `dir:` piece names a directory, so the text must appear inside ONE
+ * segment rather than being harvested from several unrelated ones — and, as
+ * `matchPathSegments` already does for directory query segments, it must
+ * appear CONTIGUOUSLY. Both rules matter:
+ *
+ * - Across segments: `dir:ui` matched `.claude/skills/action-sync-chain` by
+ *   taking a `u` from one segment and an `i` from another. That is also what
+ *   made it slow — a two-letter subsequence is present nearly everywhere, so
+ *   48,824 of 51,266 entries reached the DP matrix (~50ms; `dir:src` 45,267
+ *   and ~65ms).
+ * - Inside a segment: a scattered match still admits junk. `dir:src` matched
+ *   the segment `actors_interaction_info` (s···r··c) and `_source` (s·r·c).
+ *
+ * Contiguity is what a typed directory name actually means, and it drops
+ * `dir:ui` to 9,563 candidates and `dir:src` to 2,577.
+ *
+ * Among contiguous candidates the leftmost (which also scores highest) wins.
+ */
+function bestDirectorySegment(
+  directory: string,
+  directoryLower: string,
+  needle: string,
+): { text: string, lower: string, start: number } | undefined {
+  let segmentStart = 0
+  for (let i = 0; i <= directoryLower.length; i++) {
+    if (i !== directoryLower.length && directoryLower.charCodeAt(i) !== 47) continue // '/'
+    if (i > segmentStart) {
+      const lower = directoryLower.slice(segmentStart, i)
+      if (lower.includes(needle)) {
+        return { text: directory.slice(segmentStart, i), lower, start: segmentStart }
+      }
+    }
+    segmentStart = i + 1
+  }
+  return undefined
+}
+
+/**
  * Conservative gate: can `needle` appear in `hay` as a subsequence? Rejects
  * only genuine impossibilities, so it never removes a real match — it just
  * spares the DP matrix for the vast majority of entries.
@@ -430,23 +471,25 @@ export function scoreEntry(
     }
 
     if (piece.scope === 'dir') {
-      // Score the directory PREFIX rather than the whole path. The piece must
-      // land outside the basename anyway, and the prefix is far shorter than
-      // the path, so the DP matrix shrinks by the basename's share — the
-      // difference between a ~7ms and a ~50ms query on a 50k-entry index.
+      // Score the directory SEGMENT the piece lands in, not the flattened
+      // directory prefix. See `bestDirectorySegment` for why both "one
+      // segment" and "contiguous" are required, and what each fixes.
       if (!directoryReady) {
         directory = path.slice(0, nameStart)
         directoryLower = pathLower.slice(0, nameStart)
         directoryReady = true
       }
       if (directory === '') return undefined
-      if (!isSubsequence(piece.text, directoryLower)) return undefined
-      const dirScore = scoreFuzzy(piece.text, directory, directoryLower, scores, matches, positions)
+      const segment = bestDirectorySegment(directory, directoryLower, piece.text)
+      if (segment === undefined) return undefined
+
+      const dirScore = scoreFuzzy(piece.text, segment.text, segment.lower, scores, matches, positions)
       if (dirScore === 0) return undefined
       forcedDir = true
       total += dirScore
       usedPath = true
-      for (const position of positions) dirPositions.push(position)
+      // Positions are relative to the segment; report them in path space.
+      for (const position of positions) dirPositions.push(segment.start + position)
       continue
     }
 
