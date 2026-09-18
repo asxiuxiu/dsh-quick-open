@@ -33,17 +33,55 @@ export interface Shortcut {
   key: string
 }
 
-/** What ships: Cmd+P on macOS, Ctrl+P elsewhere. */
-export const DEFAULT_SHORTCUT: Shortcut = {
-  mod: true,
-  ctrl: false,
-  shift: false,
-  alt: false,
-  key: 'p',
+/**
+ * The gestures this plugin binds.
+ *
+ * Kept as one named set rather than one storage key per feature: they share
+ * the platform-modifier semantics, the validation, and the settings UI, and a
+ * single record makes it impossible for one binding to be persisted in a shape
+ * another cannot read.
+ */
+export type ShortcutAction = 'open' | 'find' | 'reference'
+
+/** Every action, in the order the settings panel shows them. */
+export const SHORTCUT_ACTIONS: readonly ShortcutAction[] = ['open', 'find', 'reference']
+
+/** Human label for each action. */
+export const SHORTCUT_LABELS: Record<ShortcutAction, string> = {
+  open: '呼出快速打开面板',
+  find: '在文件预览里搜索内容',
+  reference: '把选中文件加入对话（面板内）',
 }
 
-/** localStorage key the settings panel writes and the listener reads. */
-export const SHORTCUT_KEY = 'dsh-quick-open:shortcut'
+/** One-line explanation of when each action applies. */
+export const SHORTCUT_HINTS: Record<ShortcutAction, string> = {
+  open: '任意会话页面按下即可呼出；再按一次关闭。',
+  find: '焦点在侧边栏文件预览里时生效，打开浮动查找条。',
+  reference: '快速打开面板打开时生效：按住修饰键再回车，把文件作为引用放进草稿，面板不关闭。',
+}
+
+/**
+ * What ships.
+ *
+ * `open` and `find` mirror the conventions every editor uses (Ctrl/Cmd+P and
+ * Ctrl/Cmd+F), so the defaults need no learning. `reference` is Ctrl/Cmd+Enter
+ * — the palette's own modifier pressed with its accept key — which is why it
+ * is a full combination rather than a bare key like the built-in Enter.
+ */
+export const DEFAULT_SHORTCUTS: Record<ShortcutAction, Shortcut> = {
+  open: { mod: true, ctrl: false, shift: false, alt: false, key: 'p' },
+  find: { mod: true, ctrl: false, shift: false, alt: false, key: 'f' },
+  reference: { mod: true, ctrl: false, shift: false, alt: false, key: 'enter' },
+}
+
+/** The primary binding, for callers that only ever mean "open the palette". */
+export const DEFAULT_SHORTCUT: Shortcut = DEFAULT_SHORTCUTS.open
+
+/** Where every binding is stored, as one record. */
+export const SHORTCUTS_KEY = 'dsh-quick-open:shortcuts'
+
+/** The single-binding key used before the set existed, read once for migration. */
+const LEGACY_SHORTCUT_KEY = 'dsh-quick-open:shortcut'
 
 /** True when this build runs on macOS (Cmd is the primary modifier there). */
 export function isMacPlatform(): boolean {
@@ -64,17 +102,27 @@ export function primaryModifierLabel(): string {
   return isMacPlatform() ? 'Cmd' : 'Ctrl'
 }
 
+/** Named (non-character) keys a gesture may use, lowercased. */
+const NAMED_KEYS = new Set(['enter', 'space', 'tab', 'backspace', 'delete', 'home', 'end'])
+
 /**
- * Split a `KeyboardEvent.key` into a bindable single-character key.
+ * Split a `KeyboardEvent.key` into a bindable key, or undefined when it may
+ * not be bound.
  *
- * Returns undefined for modifier-only presses (a bare `Control` keydown must
- * not become the shortcut) and for keys that are not a single character, so a
- * recorder cannot bind `F5` or `Escape` by accident.
+ * Single characters are taken as themselves, lowercased so Caps Lock cannot
+ * break the shortcut. A small allowlist of named keys is accepted because a
+ * gesture like "add this file to the conversation" naturally lands on Enter.
+ * Escape is deliberately NOT bindable: the layers use it to close, and binding
+ * it would leave a panel with no way out.
  */
 export function bindableKey(eventKey: string): string | undefined {
-  if (eventKey === ' ' ) return 'space'
+  if (eventKey === ' ') return 'space'
+  const lower = eventKey.toLowerCase()
+  if (NAMED_KEYS.has(lower)) return lower
+  // Anything else longer than one character is a modifier, a function key, or
+  // an arrow — none of which a recorder should bind by the user pressing it.
   if (eventKey.length !== 1) return undefined
-  return eventKey.toLowerCase()
+  return lower
 }
 
 /**
@@ -91,7 +139,19 @@ export function matchesShortcut(
 ): boolean {
   const key = bindableKey(event.key)
   if (key === undefined || key !== shortcut.key) return false
+  return modifiersMatch(shortcut, event, mac)
+}
 
+/**
+ * The modifier half of `matchesShortcut`, for gestures that carry modifiers but
+ * no key — a modified mouse click reuses a keyboard binding's modifiers without
+ * having a key of its own.
+ */
+export function modifiersMatch(
+  shortcut: Shortcut,
+  event: { ctrlKey: boolean, metaKey: boolean, shiftKey: boolean, altKey: boolean },
+  mac: boolean = isMacPlatform(),
+): boolean {
   // The event's contribution to `mod` and `ctrl` depends on the platform:
   // on macOS Cmd is `mod` and Ctrl is `ctrl`; elsewhere Ctrl is `mod` and the
   // literal-ctrl slot is unreachable (there is only one Ctrl key).
@@ -112,8 +172,16 @@ export function describeShortcut(shortcut: Shortcut, mac: boolean = isMacPlatfor
   if (shortcut.ctrl) parts.push('Ctrl')
   if (shortcut.shift) parts.push('Shift')
   if (shortcut.alt) parts.push(mac ? 'Option' : 'Alt')
-  parts.push(shortcut.key === 'space' ? 'Space' : shortcut.key.toUpperCase())
+  parts.push(keyLabel(shortcut.key))
   return parts.join('+')
+}
+
+/** Display name for one key: `Enter`, `Space`, `P`, `/`. */
+function keyLabel(key: string): string {
+  if (key === 'space') return 'Space'
+  // Named keys read as words; a single character reads as its uppercase form.
+  if (key.length > 1) return key.charAt(0).toUpperCase() + key.slice(1)
+  return key.toUpperCase()
 }
 
 /**
@@ -131,38 +199,82 @@ export function validateShortcut(shortcut: Shortcut): string | undefined {
   return undefined
 }
 
-/** Read the persisted shortcut, falling back to the default on anything odd. */
-export function readShortcut(): Shortcut {
+/**
+ * Coerce one stored value into a Shortcut, or undefined when it is unusable.
+ *
+ * Exported for the tests and for the migration path: every rejection here is a
+ * value that would otherwise make a gesture unreachable or fire on keystrokes
+ * the user never chose.
+ */
+export function coerceShortcut(value: unknown): Shortcut | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const record = value as Record<string, unknown>
+  const key = record.key
+  if (typeof key !== 'string' || bindableKey(key) !== key) return undefined
+  const shortcut: Shortcut = {
+    mod: record.mod === true,
+    ctrl: record.ctrl === true,
+    shift: record.shift === true,
+    alt: record.alt === true,
+    key,
+  }
+  return validateShortcut(shortcut) === undefined ? shortcut : undefined
+}
+
+/**
+ * Read every binding, falling back to the defaults per action.
+ *
+ * Per ACTION, not all-or-nothing: one unreadable entry must not reset the
+ * others, because the user's other choices are still perfectly good.
+ *
+ * A single binding saved under the pre-set key is migrated into `open`, so an
+ * existing customization survives this upgrade.
+ */
+export function readShortcuts(): Record<ShortcutAction, Shortcut> {
+  const out: Record<ShortcutAction, Shortcut> = { ...DEFAULT_SHORTCUTS }
   try {
-    const raw = window.localStorage.getItem(SHORTCUT_KEY)
-    if (raw === null) return DEFAULT_SHORTCUT
-    const parsed: unknown = JSON.parse(raw)
-    if (typeof parsed !== 'object' || parsed === null) return DEFAULT_SHORTCUT
-    const record = parsed as Record<string, unknown>
-    const key = record.key
-    if (typeof key !== 'string' || bindableKey(key) !== key) return DEFAULT_SHORTCUT
-    const shortcut: Shortcut = {
-      mod: record.mod === true,
-      ctrl: record.ctrl === true,
-      shift: record.shift === true,
-      alt: record.alt === true,
-      key,
+    const raw = window.localStorage.getItem(SHORTCUTS_KEY)
+    if (raw !== null) {
+      const parsed: unknown = JSON.parse(raw)
+      if (typeof parsed === 'object' && parsed !== null) {
+        const record = parsed as Record<string, unknown>
+        for (const action of SHORTCUT_ACTIONS) {
+          const coerced = coerceShortcut(record[action])
+          if (coerced !== undefined) out[action] = coerced
+        }
+        return out
+      }
+      return out
     }
-    // A stored value with no modifier would make the palette unreachable-by-
-    // accident; treat it as corrupt rather than honouring it.
-    return validateShortcut(shortcut) === undefined ? shortcut : DEFAULT_SHORTCUT
+    // Migration: the earlier version stored only the palette's own binding.
+    const legacy = window.localStorage.getItem(LEGACY_SHORTCUT_KEY)
+    if (legacy !== null) {
+      const coerced = coerceShortcut(JSON.parse(legacy))
+      if (coerced !== undefined) out.open = coerced
+    }
+    return out
   } catch {
-    return DEFAULT_SHORTCUT
+    return out
   }
 }
 
-/** Persist the shortcut; a storage failure must not break the panel. */
-export function writeShortcut(shortcut: Shortcut): void {
+/** The binding for one action, on the current platform. */
+export function readShortcut(action: ShortcutAction = 'open'): Shortcut {
+  return readShortcuts()[action]
+}
+
+/** Persist the whole set; a storage failure must not break the panel. */
+export function writeShortcuts(shortcuts: Record<ShortcutAction, Shortcut>): void {
   try {
-    window.localStorage.setItem(SHORTCUT_KEY, JSON.stringify(shortcut))
+    window.localStorage.setItem(SHORTCUTS_KEY, JSON.stringify(shortcuts))
   } catch {
     // A full or blocked localStorage is not worth surfacing for a preference.
   }
+}
+
+/** Persist one action, leaving the others as stored. */
+export function writeShortcut(shortcut: Shortcut, action: ShortcutAction = 'open'): void {
+  writeShortcuts({ ...readShortcuts(), [action]: shortcut })
 }
 
 /**

@@ -26,6 +26,7 @@ import { addressOfRoot, isVisible, lineOfNode, previewRootOf, visiblePreviews, t
 import { clearMatches, collectTextPieces, matchSpans, paintMatches, revealMatch, MATCH_LIMIT, type TextPiece, type MatchSpan } from './find.ts'
 import { appendToDraft, buildSelectionText, readSelectionFormat, SELECTION_FORMAT_KEY, type SelectionFormat } from './selection.ts'
 import { isImeComposition } from '../ime-guard.ts'
+import { matchesShortcut, readShortcut } from '../shortcut.ts'
 import { t } from './locales.ts'
 import { previewCss } from './styles.ts'
 
@@ -250,8 +251,9 @@ export function PreviewAugmentations(props: {
         closeFind()
         return
       }
-      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
-      if (event.key !== 'f' && event.key !== 'F') return
+      // Read per keypress so a rebind takes effect without a reload, matching
+      // the palette's own listener.
+      if (!matchesShortcut(readShortcut('find'), event)) return
       const target = findOpenRef.current ? targetRef.current : pickTarget()
       if (target === null || !isVisible(target.root)) return
       event.preventDefault()

@@ -17,13 +17,17 @@ import type { CSSProperties } from 'react'
 import type { Context, SessionScope } from './types.ts'
 import { readSelectionFormat, writeSelectionFormat, type SelectionFormat } from './preview/selection.ts'
 import {
-  DEFAULT_SHORTCUT,
+  DEFAULT_SHORTCUTS,
+  SHORTCUT_ACTIONS,
+  SHORTCUT_HINTS,
+  SHORTCUT_LABELS,
   describeShortcut,
   isMacPlatform,
-  readShortcut,
+  readShortcuts,
   shortcutFromEvent,
   writeShortcut,
   type Shortcut,
+  type ShortcutAction,
 } from './shortcut.ts'
 
 /** One list editor row group: a labelled textarea of newline-separated patterns. */
@@ -231,10 +235,10 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
   // The viewer preference is app-wide (not a workspace index rule), so it is
   // stored beside the recents rather than in the workspace config file.
   const [selectionFormat, setSelectionFormat] = useState<SelectionFormat>(() => readSelectionFormat())
-  // The quick-open shortcut, app-wide for the same reason.
-  const [shortcut, setShortcut] = useState<Shortcut>(() => readShortcut())
-  /** True while the button is capturing the next key combination. */
-  const [recording, setRecording] = useState(false)
+  // The quick-open gestures, app-wide for the same reason.
+  const [shortcuts, setShortcuts] = useState<Record<ShortcutAction, Shortcut>>(() => readShortcuts())
+  /** Which gesture is capturing the next combination, or null. */
+  const [recording, setRecording] = useState<ShortcutAction | null>(null)
   const [shortcutError, setShortcutError] = useState<string | null>(null)
 
   /**
@@ -244,12 +248,12 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
    * reach the app underneath, so binding `Ctrl+K` would both set the shortcut
    * and trigger whatever else listens for it.
    */
-  const onRecorderKeyDown = useCallback((event: React.KeyboardEvent) => {
-    if (!recording) return
+  const onRecorderKeyDown = useCallback((event: React.KeyboardEvent, action: ShortcutAction) => {
+    if (recording !== action) return
     event.preventDefault()
     event.stopPropagation()
     if (event.key === 'Escape') {
-      setRecording(false)
+      setRecording(null)
       setShortcutError(null)
       return
     }
@@ -259,17 +263,10 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
       return
     }
     setShortcutError(null)
-    setShortcut(next)
-    writeShortcut(next)
-    setRecording(false)
+    setShortcuts((prev) => ({ ...prev, [action]: next }))
+    writeShortcut(next, action)
+    setRecording(null)
   }, [recording])
-
-  const resetShortcut = useCallback(() => {
-    setShortcut(DEFAULT_SHORTCUT)
-    writeShortcut(DEFAULT_SHORTCUT)
-    setShortcutError(null)
-    setRecording(false)
-  }, [])
 
   // Follow the active session: switching conversations must switch the
   // workspace shown (and the file edited).
@@ -376,38 +373,48 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
   // The shortcut is app-wide too: it belongs to the user's habits, not to a
   // workspace. It renders in both branches for the same reason the viewer
   // preference does.
+  // Every gesture is app-wide too, so this section renders in both branches.
   const shortcutSection = (
     <div style={styles.field}>
-      <div style={styles.label}>呼出快速打开面板的快捷键</div>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button
-          type="button"
-          style={{ ...styles.button, ...(recording ? styles.buttonRecording : {}) }}
-          onClick={() => setRecording(true)}
-          onBlur={() => setRecording(false)}
-          onKeyDown={onRecorderKeyDown}
-        >
-          {recording
-            ? '按下新的快捷键…（Esc 取消）'
-            : describeShortcut(shortcut, isMacPlatform())}
-        </button>
-        <button
-          type="button"
-          style={styles.button}
-          onClick={resetShortcut}
-          disabled={recording}
-        >
-          恢复默认
-        </button>
-      </div>
-      <div style={styles.hint}>
-        点上面的按钮再按一次新的组合键即可（必须带修饰键）。
+      <div style={styles.label}>快捷键</div>
+      {SHORTCUT_ACTIONS.map((action) => (
+        <div key={action} style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+          <div style={styles.hint}>{SHORTCUT_LABELS[action]}</div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button
+              type="button"
+              style={{ ...styles.button, ...(recording === action ? styles.buttonRecording : {}) }}
+              onClick={() => setRecording(action)}
+              onBlur={() => setRecording((current) => (current === action ? null : current))}
+              onKeyDown={(event) => onRecorderKeyDown(event, action)}
+            >
+              {recording === action
+                ? '按下新的快捷键…（Esc 取消）'
+                : describeShortcut(shortcuts[action], isMacPlatform())}
+            </button>
+            <button
+              type="button"
+              style={styles.buttonSecondary}
+              onClick={() => {
+                const fallback = DEFAULT_SHORTCUTS[action]
+                setShortcuts((prev) => ({ ...prev, [action]: fallback }))
+                writeShortcut(fallback, action)
+                setShortcutError(null)
+                setRecording(null)
+              }}
+              disabled={recording !== null}
+            >
+              恢复默认
+            </button>
+          </div>
+          <div style={styles.hint}>{SHORTCUT_HINTS[action]}</div>
+        </div>
+      ))}
+      <div style={{ ...styles.hint, marginTop: 6 }}>
+        点按钮再按一次新的组合键即可（必须带修饰键；Enter 也可单独作为主键）。
         <br />
-        默认：
-        <strong>{describeShortcut(DEFAULT_SHORTCUT, isMacPlatform())}</strong>
-        ，其中 {isMacPlatform() ? 'Cmd' : 'Ctrl'} 是
-        {isMacPlatform() ? 'macOS' : '本平台'}的主修饰键——同一份配置换到
-        {isMacPlatform() ? ' Windows 会按 Ctrl' : ' macOS 会按 Cmd'} 解释，
+        {isMacPlatform() ? 'Cmd' : 'Ctrl'} 是{isMacPlatform() ? 'macOS' : '本平台'}的主修饰键——
+        同一份配置换到{isMacPlatform() ? ' Windows 会按 Ctrl' : ' macOS 会按 Cmd'}解释，
         所以跨平台的习惯都能对上。
         {shortcutError !== null && (
           <>
