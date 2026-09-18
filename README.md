@@ -1,280 +1,142 @@
 # dsh-quick-open
 
-DSH Web GUI 插件：VSCode 式 `Ctrl+P` 快速打开，**索引级搜索性能 + 模糊匹配**。
+**DSH 的极速文件导航与引用插件**：VSCode 式 `Ctrl+P` 快速打开，外加对内置文件预览的两个刚需增强——文件内查找、选中加入会话。
 
-- 在任意会话页面按 `Ctrl+P` 唤出搜索浮层（window 级 capture 监听，不依赖任何面板挂载状态）
-- **自有 host 半 `/quick-open/api/search`**：每工作区内存索引（16 路并行 `readdir` 建索引），查询纯内存打分——实测 5 万条目**热查询中位数 7.4ms、最大 18.5ms**；TTL 30s + stale-while-revalidate 保鲜
-- **模糊匹配不要求拼对全名**：`clntmod` → `client_module.cpp`、`playerctrl` → `player_camera_controller.lua`、`apprpc` → `app_rpc.nsd` 都能直接命中（见下节）
-- **空格分词 AND**：`game scene lua` 三片必须全部命中；**查询含 `/` 时匹配完整路径**，可用来按目录定位（`ui/index.html`）
-- 匹配到的字符**逐段高亮**（不再是整段子串），路径查询时目录片段也会高亮
-- 空查询显示**最近使用**文件（按工作区记忆，`Ctrl+P → Enter` 直接重开上一文件）
-- `Enter` 在侧边栏中打开文件（走 DSH 原生右侧栏 `ctx.sidebarRight.openResource()`，与侧边栏文件树点击同一条路径）
-- `Ctrl+Enter` 把文件作为纯文本 `@` 引用插入当前会话输入框，**浮层保持打开、焦点留在搜索框**，可连续添加多个文件
-- 结果行携带 `isDir`：目录按 `Enter` 提示，按 `Ctrl+Enter` 以 `@dir/` 纯文本引用（索引路由零探测；历史记录中的行按需向本插件 host 半探测）
-- `↑↓`/`PageUp`/`PageDown`/`Home`/`End` 导航、`Esc` 关闭、点击遮罩关闭；中文输入法组词中不响应按键
-- footer 显示索引透明度信息（条目数与新鲜度）
-- **每工作区可配置索引规则**（设置页编辑，见下）：排除目录 / 强制包含目录 / 后缀白名单 / 文件名白名单 / 是否索引目录
-- **可索引工作区之外的目录**（`extraRoots`）：引擎仓库与游戏仓库是并列文件夹，开发时需要互查
-- **自带文件查看器**（见下）：接管侧边栏的文件预览，提供文件内查找与「选中加入会话」
+> 5 万文件的工作区里，热查询中位数 **7.4ms**。
 
-## 文件查看器
+## 它解决什么问题
 
-本插件同时接管 DSH 侧边栏的**文件预览**，所以打开文件由它渲染：
+**1. 大仓库里找文件太慢、太难拼。**
+工程仓库动辄几万文件，`client_module.cpp` 这种名字谁记得住全拼？本插件把 VSCode quick-open 的模糊打分器原样移植过来——`clntmod` 就能命中 `client_module.cpp`——再配上每工作区内存索引，按键即出结果。带 `/` 的路径查询做了逐段锚定（`login/index.html` 不会从五个不相干的目录里各借一个字母拼出假命中），`dir:` / `file:` 前缀可以精确限定匹配范围。
 
-- **文件内查找**：`Ctrl/Cmd+F` 打开查找卡片（与 `Ctrl+P` 同一套配色与圆角），回车 / `Shift+回车` 前后跳转，`Alt+G` 跳行，`Esc` 关闭
-- **选中即引用**：在文件里选中一段文本，点「加入会话」，插入 `@相对路径:起止行`
-- 语法高亮：C/C++、Lua、JSON/`.ast`、XML、SQL、Go、Python、JS/TS、Markdown、YAML、sh/bat、PowerShell、proto、TOML、CMake、diff
-- 只读（不改文件）；行号、自动换行开关、明暗主题跟随、按 `line` 参数定位打开
+**2. 给 AI 会话补充代码上下文，步骤太碎。**
+找到文件 → 打开 → 选中 → 复制 → 切回输入框 → 粘贴 → 补路径……本插件把这条路压缩成两个动作：`Ctrl+Enter` 直接把文件作为 `@` 引用放进草稿（浮层不关，可以连加好几个）；在文件预览里选中一段代码，点浮出的「加入会话」，自动插入 `@路径:起止行` 的精确引用。
 
-`.md` / `.html` / `.pdf` / 图片等**内置预览能真正渲染**的文件，标题栏会多一个「预览」按钮，把当前 tab 交还给内置渲染器（同 tab 替换，不会多开一个）。代码文件不显示该按钮——内置预览对代码只是无高亮的纯文本，比本查看器更差。
+**3. DSH 内置文件预览不能搜。**
+内置预览什么都能渲染（代码高亮、Markdown、HTML、PDF、图片），唯独没有文件内查找。本插件补上一条 `Ctrl+F` 浮动搜索条——对所有渲染器一视同仁地高亮命中，还顺手做了区分大小写、选区预填、「仅已加载」提示这些细节。**不接管、不替换内置预览，卸载即恢复原样。**
 
-> 这个按钮是必需的：本查看器以 `extension` 带接管了**所有**文件地址，也就一并接管了原本由内置渲染器处理的 Markdown/HTML/PDF。不做交还入口，`.md` 就只能看源码了。
+## 功能
 
-接管机制用的是注册表公开的**跨 kind 排名**，而不是顶替内置的 kind：本插件以自己的 kind（`dsh-quick-open:file`）注册、声明与内置预览相同的地址 pattern、使用 `extension` 优先级带。地址归属由排名决定（`extension` 3 > `builtin` 2 > `fallback` 1），内置预览用的是 `fallback`，因此本插件必然胜出，**不依赖插件加载顺序**。
+### ⚡ 快速打开（`Ctrl+P`）
 
-> 交还时**必须显式指定 `kind: 'text'`**：注册表只在未指定 kind 时才按排名挑，而本插件排名更高——不指定就会原地重开成自己。注册表的 `claim(address, kind)` 明确写了「点名 type 即是决定」，交还正是走这条路。
+任意会话页面唤出，焦点纪律严格（键盘焦点永不离开搜索框）：
 
-> **为什么不用内置的 `text` kind**：该 kind 被内置预览以 `fallback` 占住，而注册表的 `coexists` 规定「`fallback` 不与其他任何注册共享 kind」。撞上去会抛异常，且因为注册发生在 `apply()` 阶段，异常会连带把**内置包**的挂载打掉——实测会让整个 DSH 启动失败。自有 kind 完全避开这个冲突，**没有改动任何 DSH 包**，内置预览仍注册在底层，卸载本插件即恢复。
-
-### 引用格式（可配置）
-
-设置页「Quick Open 索引 → 文件查看器」三选一：
-
-| 格式 | 插入内容 | 取舍 |
-|---|---|---|
-| **仅位置**（默认） | `@path/file.cpp:12-15` | 最省上下文，模型自行读取所需范围 |
-| 位置 + 提示 | 同上 +「请用 read 工具读取该文件的这一段」 | 多几个 token，减少模型忽略行号 |
-| 围栏代码块 | 位置 + 选中内容 | 自包含，代价是每轮重复这段代码 |
-
-偏好存 `localStorage`（应用级，与工作区索引规则分开）。
-
-> **包体积**：查看器内联 CodeMirror 与各语言语法树，`lib/client.js` 约 1.4MB。DSH 的模块加载器一个插件只服务一个文件，因此动态 import 无法拆成独立 chunk——语法包只能内联，这是取舍后的结果。
-
-## 搜索匹配
-
-匹配器是 **VSCode quick-open 打分器的移植**（`src/vs/base/common/fuzzyScorer.ts` + `filters.ts`，常数与分档取自源码，非自创）。
-
-**为什么是移植而不是自调参**：先试过 8 种自创打分方案（纯子序列、段感知、结构分层、join 子词 + 长度归一化……），每一种都在另一组查询上崩掉——详见 `docs/matching-research.md` 的实验与负结果。VSCode 的常数是 `1<<16` 量级的**互不重叠分档基数**加 `computeCharScore` 的小整数，二者的量级关系已经决定了「命中文件名」永远压过「命中路径」，**没有需要调的权重**。这是它更稳的根本原因。
-
-| 行为 | 说明 |
+| 你要做的 | 怎么做 |
 |---|---|
-| 字符命中 | `+1`；连续命中 `min(run,3)*6 + max(0,run-3)*3`；大小写也相同 `+1` |
-| 词首加成 | 位置 0 `+8`；前一位是 `/` 或 `\` `+5`；前一位是 `_ - . 空格 ' " :` `+4`；词内驼峰（非连续时）`+2` |
-| 顺序约束 | 非首字符必须有对角分才计分，保证查询字符按序匹配 |
-| 分档 | 全路径相同 `1<<18` > 文件名前缀 `1<<17` > 命中文件名 `1<<16` > `dir:` 命中目录 `1<<15` > 仅命中目录 `1<<14` |
-| 平局 | 命中越紧凑优先（跨度过大者降级），再由路径长度兜底——保证结果顺序稳定 |
-| 门槛 | 查询片必须是目标的子序列才进入矩阵打分（保守预筛，不会漏掉真实命中） |
+| 模糊找文件 | 直接输入，如 `clntmod` 命中 `client_module.cpp` |
+| 按目录定位 | `ui/index.html`（逐段锚定，不会拼假命中） |
+| 跳到指定行 | `main.cpp:120`（内置预览自动滚动并高亮该行） |
+| 精确限定范围 | `dir:ui index.html`、`file:main.cpp`（简写 `d:` / `f:`） |
+| 重开上次文件 | `Ctrl+P` → `Enter`（空查询显示最近使用） |
+| 目录逐级下钻 | `Tab` 补全，目录带 `/` 可连续按 |
+| 引用进会话 | `Ctrl+Enter` 或点行尾「+ 引用」，**不关闭浮层**，可连续添加 |
+| 打开文件 | `Enter`，走 DSH 原生右侧栏，与文件树点击同一条路径 |
 
-### 带 `/` 的路径查询：逐段锚定
+- 匹配字符逐段高亮；深路径的目录部分**前置省略**，永远保住区分结果的那段
+- 每工作区索引规则可配（设置页）：排除目录、强制包含生成目录、后缀白名单、是否索引目录
+- **`extraRoots` 额外索引根**：引擎仓库与游戏仓库并列存放？把工作区外的目录一并索引，结果行带来源徽章，引用自动用绝对路径
+- footer 常驻索引透明度（条目数 · 新鲜度）与键位提示
 
-**这是匹配质量上最关键的一条规则。** 查询里带 `/` 时（`login/index.html`），不会把整串当成一条子序列在完整路径上匹配，而是**按 `/` 拆开，每段必须在单个路径段内找到**：
+### 🔍 文件预览增强
 
-| 规则 | 说明 |
-|---|---|
-| 目录段必须**连续** | `login` 必须是某个目录名里连续出现的一段 |
-| 文件名段必须**连续且落在 basename 里** | `index.html` 必须是文件名的一部分 |
-| 各段**从左到右**依次消耗路径段 | `source/client/client_module` 要求 `source` 在前、`client` 在其后 |
+内置预览原有的渲染器切换、分页加载、变更提示、换行、行号跳转全部保留，本插件只加两样：
 
-**为什么必须这样**：不锚定的话，`login/index.html` 会把 `l-o-g-i-n` 从五个互不相关的目录里各取一个字母拼出来——
+**文件内查找（`Ctrl+F`）**
+- 浮动搜索条，随输入即时高亮全部命中（CSS Custom Highlight API，不改动预览的 DOM）
+- 纯文本、代码高亮、Markdown 渲染视图通吃；`Enter` / `Shift+Enter` 前后跳转
+- 选中一段文本再按 `Ctrl+F`，自动预填为查询词
+- `Aa` 区分大小写开关（记住你的偏好）
+- 分页加载的大文件会明确提示「仅已加载」——「无结果」不会被误读为「文件里没有」
+- `Esc` 随处可关（不用先把焦点点回搜索框）
 
-```
-E:/cb2_master/dev/wo[l]fgang/_games/pr[o]ven_[g]round/_content/ui/coherent/black_curta[i][n][/]index.html
+**选中即引用**
+- 在预览里选中任意文本 → 点浮出的「加入会话」→ 插入 `@相对路径:起止行`
+- Markdown 等渲染视图里同样可用（无行号时退化为 `@路径`）
+- 引用格式三选一（设置页）：仅位置（默认，最省上下文）/ 位置+读取提示 / 围栏代码块（自包含）
+
+<!-- 截图位：建议补三张——Ctrl+P 结果列表、文件内查找高亮、选中浮框 -->
+
+## 安装
+
+```bash
+dsh plugin --profile web add github:asxiuxiu/dsh-quick-open   # GitHub 源
+dsh plugin --profile web add dsh-quick-open                   # npm 源
+dsh plugin --profile web add link:D:/dev/dsh-quick-open       # 本地开发
 ```
 
-实测该查询有 **27,002 条**（占全库 52.7%）这种散落命中，而真正正确的只有 **204 条**——正确答案被埋在 130:1 的噪音里。锚定后 `login/index.html` 从 **620 条收敛到 7 条，全部正确**。
+安装后**重启 DSH**（host 半只在 boot 时挂载）。只依赖 DSH 本体，不依赖任何第三方侧边栏插件。
 
-同理 `game_scene/chaos_game_scene` 从 9 条收敛到 **1 条**，`source/client/client_module` 从 25 条收敛到 **2 条**（正是 `client_module.h` / `.cpp`）。
+## 配置（可选）
 
-该规则**只作用于带 `/` 的查询**：42 条不含分隔符的查询经对比测试与改动前逐条一致。
+开箱即用：没有配置文件时使用内置的**语言中立、项目中立**默认规则（只排除各生态公认的噪音目录 + 跨语言通用源码后缀）。
 
-### 作用域前缀：`dir:` / `file:`
-
-每个空格分隔的词都可以带前缀，限定它只能在哪里匹配：
-
-| 写法 | 含义 |
-|---|---|
-| `dir:ui index.html` | `ui` **必须**命中目录段，`index.html` 命中文件名 |
-| `d:ui index.html` | 同上（简写） |
-| `file:index.html` | 只匹配文件名，不回落到路径 |
-| `f:index.html` | 同上（简写） |
-| `ui/index.html` | 带 `/` 等价于路径查询（逐段锚定，见上） |
-
-- **零索引体积**：纯查询解析，不新增任何索引结构
-- **零默认行为改动**：不带 `/` 也不带前缀时逐字节等价于原行为（对比测试见 `scripts/verify-no-regression.mjs`）
-- 前缀只在**词首**识别；`e:foo`（Windows 盘符）、`a:bc` 这类含冒号的词按字面处理
-- 半成品前缀（如刚敲下 `dir:`）不产生约束，不会把结果清空
-- 代价：`dir:` 查询要按路径打分，实测 22–48ms（普通查询 ~7ms）。这是显式高级查询，可接受
-
-**已知边界**：`index.html ui` 这种「无分隔符、想让 `ui` 去匹配目录段」的写法**不保证**把 `ui/` 目录的结果排到最前——`ui` 本身就是 `..._observer_index.html` 的合法子序列，算法无法知道你想指的是目录。请改用 `dir:ui index.html`，或带上 `/`（`ui/index.html`）。
-
-> 该边界已做过完整可行性评估（体积 + 准确率实测），结论是**不做自动目录筛选**：机制能让 `index.html bag` 从 0 结果变正确，但会把 `game_scene lua`、`client module`、`material ast` 三个原本正确的查询劫持到错误结果。根因是 `lua`/`module`/`ast` 这类词**既是真实目录名又是常见文件名片段**——2,801 个目录名里只有 3 个不出现在任何 basename 中（`module` 有 4 个目录却出现在 539 个 basename 里），不存在可用的判定阈值。数据与各结构体积对比见 `docs/dir-filter-evaluation.md`。
-
-## 索引规则（每工作区一份）
-
-索引什么由工作区的 **`.dsh/quick-open.json`** 决定；没有该文件时使用**内置默认规则**（`src/rules.ts` 的 `DEFAULT_RULES`）。旧版本的仓库根 `.dsh-quick-open.json` 仍会被读取（作为回退），保存时会自动迁移到新位置并删除旧文件。
-
-配置放在 `.dsh/` 下而不是仓库根，是为了让插件的痕迹集中在**一个命名空间目录**里，而不是往一个它并不拥有的项目里撒点文件。建议把它加入本地忽略（`.git/info/exclude`），不要提交进业务仓库。
-
-**为什么需要它**：早期版本硬编码 `SKIP_DIRS` 黑名单后全量收，噪音占绝大多数——shader 编译产物、安装拷贝、目标文件；而源码**真正会 include** 的生成头文件树却因为父目录名叫 `build` 被整棵排掉。
-
-**内置默认是语言中立、项目中立的**：只有各生态公认的噪音目录 + 跨语言通用的源码/配置后缀。某个仓库特有的构建布局、生成头文件树、并列的兄弟仓库，都写在**那个仓库自己的配置文件**里——这正是规则按工作区存放的意义。把某个公司的仓库布局硬编码成出厂默认，换一个项目就会误伤。
-
-| 字段 | 作用 |
-|---|---|
-| `excludeDirs` | 整棵子树不遍历，见下方模式语义 |
-| `includeDirs` | **优先级高于排除**，救回被父级排除但需要的生成树（如生成头文件目录）。也是唯一能下探符号链接目录的方式 |
-| `includeExtensions` | 文件后缀白名单（带点，小写）。**留空 = 不按后缀过滤** |
-| `includeFilenames` | 完整文件名白名单，不受后缀限制（`CMakeLists.txt` 等） |
-| `includeDirectories` | 是否索引目录条目（关闭后无法 `@dir/` 引用） |
-| `extraRoots` | **工作区之外**的绝对目录，一并索引（见下节） |
-
-**目录模式有三种形式**，都覆盖匹配点以下的整棵子树：
-
-| 写法 | 含义 |
-|---|---|
-| `node_modules` | **裸名字：匹配任意深度**的同名目录。噪音目录几乎都会嵌套（monorepo 的 `packages/*/node_modules`、`sub/project/__pycache__`），只排除根目录那一个会静默漏掉其余全部 |
-| `build/go` | **带斜杠：锚定在工作区根**。不会匹配 `x/build/go`，也不会误伤 `build/golang` |
-| `**/shaders/d3d11` | 指定路径在任意深度 |
-
-配置示例（只写要覆盖的字段，其余省略即用默认）：
+需要定制时，「设置 → Quick Open 索引」编辑**当前工作区**的 `.dsh/quick-open.json`：
 
 ```jsonc
 {
   "version": 1,
-  "excludeDirs": ["_install", "_content", "build/Engine", "build/go"],
-  "includeDirs": ["build/p/include"],
-  "includeExtensions": [".h", ".cpp", ".py", ".lua", ".md", ".json"],
-  "includeFilenames": ["CMakeLists.txt", ".clang-format"],
+  "excludeDirs": ["_install", "build/Engine"],      // 裸名字任意深度；带斜杠锚定根；**/ 任意深度
+  "includeDirs": ["build/p/include"],               // 优先级高于排除——救回被误伤的生成树
+  "includeExtensions": [".h", ".cpp", ".py", ".md"],
+  "includeFilenames": ["CMakeLists.txt"],
   "includeDirectories": true,
-  "extraRoots": [
+  "extraRoots": [                                    // 工作区外的目录一并索引
     { "path": "E:\\path\\to\\sibling-repo\\_source", "label": "sibling/_source" }
   ]
 }
 ```
 
-> **写出完整规则集的后果**：设置面板保存时会写**当前生效的全量规则**（含从默认继承来的值），此后该工作区不再跟随插件升级后的新默认。这是有意的取舍——所见即所得，且不同工作区可以各自演化。
+保存原子写入、3 秒内生效、无需重启。规则为什么按工作区存放、后缀白名单的固有盲区、`includeDirs` 为什么能救回生成树——详见下文架构与 `docs/`。
 
-> **后缀白名单的固有盲区**：同一后缀在不同目录可能含义完全不同。`.ast` 在 shader 模板目录下是编译中间产物（数万条），在别处是**真实配置源**（材质、实体、相机配置）。这类冲突要靠**目录级排除**解决，而不是把后缀从白名单里删掉（删掉会让真实配置源一起消失）。同理 `.png` 在 UI 目录里数量巨大，靠后缀排除更划算。
+## 技术亮点
 
-## 额外索引根（工作区之外）
-
-引擎仓库与游戏仓库是**并列的两个文件夹，不是包含关系**，但开发时经常需要互查。`extraRoots` 让一个工作区把工作区外的目录一并索引：
-
-```jsonc
-{
-  "extraRoots": [
-    { "path": "E:\\cb2_master\\dev\\wolfgang\\_games\\proven_ground\\_source",   "label": "proven_ground/_source" },
-    { "path": "E:\\cb2_master\\dev\\wolfgang\\_games\\proven_ground\\_schemas",  "label": "proven_ground/_schemas" },
-    { "path": "E:\\cb2_master\\dev\\wolfgang\\_games\\proven_ground\\_content\\ui", "label": "proven_ground/ui" }
-  ]
-}
-```
-
-| 行为 | 说明 |
-|---|---|
-| 路径必须**绝对** | 相对路径会被丢弃：额外根是针对文件系统解析的，相对路径会隐式依赖进程 cwd |
-| 规则复用 | 每个额外根用**同一套**目录/后缀规则遍历（`_install` 在每个根里含义一致） |
-| 规则基准 | 目录规则按**各根自身**的相对路径匹配，所以某个额外根即使位于名叫 `build` 的目录下，也不会被工作区的 `build/*` 排除吞掉 |
-| 结果显示 | 结果行显示**完整绝对路径**（`E:/cb2_master/dev/...`），`label` 作为行首徽章 |
-| `@` 引用 | 额外根的文件用**绝对路径**引用；工作区内文件保持相对路径 |
-| 环检测 | 每个根独立维护 `seenReal`，跟随符号链接时防环 |
-
-## 设置页
-
-「设置 → Quick Open 索引」面板编辑**当前活跃会话工作区**的规则。
-
-- 顶部显示当前工作区路径与配置文件状态（已存在 / 使用默认）、当前索引条目数
-- 无活跃会话时面板**只读**并提示原因——规则按工作区存放，没有会话就没有可编辑的目标，面板不会猜测路径
-- 保存走 host 半 `config.set`：**校验 + 原子写入**（临时文件 rename），随后立即按新规则重建索引
-- 「恢复默认」删除配置文件并回落到内置默认规则
-- 配置改动在 **3 秒内外**被 host 半感知（`CONFIG_TTL_MS` 重验），无需重启
-
-## 依赖
-
-## 交互模型
-
-**焦点纪律（核心不变量）**：浮层存活期间，键盘焦点永不离开搜索框。
-
-- 行内 `mousedown` 一律 `preventDefault`，鼠标点击/悬停不会夺走输入焦点
-- `Ctrl+Enter` 插入 chip 时 DSH 输入机会异步聚焦对话输入框——控制器立即 + 80ms 延迟**两次夺回焦点**（`focusSeq` 递增驱动），赢得这场竞争
-- 打开浮层时自动全选保留的旧查询：输入即替换，方向键则复用
-
-**可发现性**：选中行右侧显示「+ 引用」按钮（`Ctrl+Enter` 的鼠标等价物），footer 常驻键位提示。
-
-## 依赖
-
-**只依赖 DSH 本体**，不依赖任何第三方侧边栏插件：
-
-- 搜索 / 引用：全部由本插件自己的 host 半与 DSH 原生 `conversation` 服务提供
-- 打开文件：DSH 原生右侧栏 `ctx.sidebarRight.openResource()`（由 `@deepseek-ai/dsh-client-ui-sidebar-right` 提供，随 DSH 发行）
-
-侧边栏若由第三方插件接管（例如 `dsh-better-sidebar` 会把文件类型注册到同一个原生侧边栏注册表），打开行为不变——本插件只走原生注册表，至于最后由谁渲染，不在它的感知范围内。
-
-## 安装
-
-```bash
-# 本插件（GitHub 源 / npm 源 / 本地 link 三选一）
-dsh plugin --profile web add github:asxiuxiu/dsh-quick-open
-dsh plugin --profile web add dsh-quick-open
-dsh plugin --profile web add link:D:/dev/dsh-quick-open   # 本地开发
-```
-
-安装后**重启 DSH**（host 半只在 boot 时挂载）。link 安装下改 client 代码后 `npm run build` + 刷新页面即可；改 host 代码（`src/index.ts`）需重启。
+- **匹配器是 VSCode quick-open 打分器的移植**（`fuzzyScorer.ts` + `filters.ts`，常数与分档取自源码）。先试过 8 种自创方案，每一种都在另一组查询上崩掉；VSCode 的 `1<<16` 量级分档基数从根本上决定了「命中文件名」永远压过「命中路径」，**没有需要调的权重**。实验与负结果：`docs/matching-research.md`
+- **路径查询逐段锚定**：不锚定时 `login/index.html` 实测有 27,002 条散落假命中（占全库 52.7%），正确答案埋在 130:1 的噪音里；锚定后从 620 条收敛到 7 条、全部正确
+- **索引管线**：16 路并行 `readdir` 建每工作区内存索引，TTL 30s + stale-while-revalidate 保鲜，配置改动 3 秒内热感知，配置写入原子化
+- **预览增强是 DOM 层装饰**：不注册 tab 类型、不补丁任何 DSH 包；查找高亮走 CSS Custom Highlight API，不触碰 React 托管的节点；选区引用直接读文档选区——因此对所有渲染器（含 PDF 文本层）一致生效
+- **验证纪律**：构建产物跑端到端桩测试（注册契约、键盘路由、搜索计数、引用写入、层级契约），关键断言都经过「故意改坏必须失败」的有效性验证
 
 ## 开发
 
 ```bash
 npm install
-npm run build       # 产出 lib/index.js（host：索引搜索路由）+ lib/client.js（__ModuleLoader__ 封装）
+npm run build       # 产出 lib/index.js（host：索引路由）+ lib/client.js（__ModuleLoader__ 封装，约 80KB）
 npm run typecheck
 
-# 验证脚本（均针对真实工作区索引，需先按脚本内路径配置工作区）
-node scripts/verify.mjs                  # 匹配质量回归（含 dir:/file: 用例）
-node scripts/verify-no-regression.mjs    # 对比 HEAD 与当前：证明不含分隔符的查询行为未变
-node scripts/verify-grammar.mjs          # dir:/file: 前缀解析边界用例
-node --experimental-strip-types scripts/verify-file-address.mjs   # 文件地址 + @ 引用拼写
-node --experimental-strip-types scripts/verify-viewer.mjs         # 查看器：地址解析 + 三种引用格式
-node scripts/verify-client-bundle.mjs    # 加载构建产物：证明 bundle 能挂载且注册正确
-node --expose-gc scripts/eval-cost.mjs   # 索引体积基线 + 候选结构代价
+# 验证脚本
+node scripts/verify.mjs                  # 匹配质量回归
+node scripts/verify-no-regression.mjs    # 不含分隔符的查询行为逐条对比
+node scripts/verify-grammar.mjs          # dir:/file: 前缀解析边界
+node --experimental-strip-types scripts/verify-file-address.mjs   # 文件地址 / @ 引用 / :行号 后缀
+node --experimental-strip-types scripts/verify-preview.mjs        # 预览增强纯逻辑
+node scripts/verify-client-bundle.mjs    # 构建产物的端到端桩测试
+node --expose-gc scripts/eval-cost.mjs   # 索引体积基线
 node scripts/eval-ambiguity.mjs          # 目录名歧义量化
 ```
 
 ## 架构
 
 ```
-src/rules.ts            索引规则：类型/默认规则/目录匹配（子树语义 + **/ glob）/文件过滤/配置解析与序列化
-src/match.ts            模糊匹配器：VSCode quick-open 打分器移植（分档/字符分/顺序约束/紧凑度平局/高亮区间）
-                        含查询解析：dir: / file: 作用域前缀（纯解析层，不带前缀时行为与之前逐字节一致）
+src/rules.ts            索引规则：目录匹配（子树语义 + **/ glob）/ 文件过滤 / 配置解析
+src/match.ts            VSCode 打分器移植 + dir:/file: 作用域前缀解析
 src/index.ts            host 半：/quick-open/api/{search,probe,config.get,config.set,config.reset}
-                        （规则驱动的并行建索引、SWIG 式模糊查询、SWR 保鲜、配置文件热重验、原子写入、trust fence、isDir 标记）
-src/client/index.tsx    client 入口：全局 Ctrl+P（ctx.effect + window capture）+ 查看器注册 + 两个 slot
-src/client/controller.ts 搜索管线（查询缓存/索引路由）、文件地址构造、打开、引用、最近记录、焦点回收
-src/client/quick-open.tsx 浮层组件（内联样式，多段高亮，无 CSS 构建链）
-src/client/settings.tsx 设置面板：工作区索引规则 + 查看器引用格式（无会话时索引部分只读降级）
-src/client/store.ts     每激活一份的状态存储（useSyncExternalStore）
-src/client/ime-guard.ts IME 组词判据（isComposing + keyCode 229，DSH core 约定）
-src/client/types.ts     最小服务契约类型（slots / sessions / conversation / sidebarRight / sidebarRightTabs）
-src/client/viewer/index.tsx       以自有 kind + extension 带注册，与内置预览同 pattern 竞争
-src/client/viewer/FileViewer.tsx  查看器主体：读取、装配、选区引用、换行与滚动记忆、交还内置预览
-src/client/viewer/cm-setup.ts     CodeMirror 扩展装配（含 searchKeymap 查找）
-src/client/viewer/cm-language.ts  后缀 → 语法（按本仓库实际文件类型选取，全部内联）
-src/client/viewer/cm-theme.ts     编辑器主题 + token 配色 + 查找卡片（对齐 Ctrl+P 配色）
-src/client/viewer/read.ts         文件地址解析 + 经 Remote 读取（含二进制降级）
-src/client/viewer/selection.ts    引用格式与草稿注入（三种格式共用）
-docs/matching-research.md 匹配方案调研：VSCode/fzf/fzy 源码结论 + 8 种设计的实测对比与负结果
-docs/dir-filter-evaluation.md 目录筛选可行性评估：索引体积实测 + 目录名歧义量化（结论：不做自动筛选）
-docs/better-sidebar-integration.md 侧边栏集成调研：文件打开/引用的通道与备选方案
+src/client/index.tsx    client 入口：全局 Ctrl+P + 预览增强挂载 + slot 注册
+src/client/controller.ts 搜索管线（查询缓存/索引路由）、:行号 解析、打开、引用、最近记录
+src/client/quick-open.tsx 浮层组件（portal 到 body，z-index 10000，多段高亮）
+src/client/settings.tsx 设置面板：索引规则 + 引用格式
+src/client/preview/     预览增强：查找条（Highlight API）+ 选中浮框 + DOM 探测（全部优雅降级）
+docs/                   匹配调研、目录筛选评估、侧边栏集成调研（含大量实测数据与负结果）
 ```
 
-## 路线图（可拓展方向）
+## 路线图
 
-按「价值 / 成本」排序：
+1. **全文搜索模式**：`%query` 前缀切换内容检索
+2. **拼音/首字母匹配**：中文文件名的拼音检索
+3. **多选批量引用**：`Ctrl+Space` 标记多行，一次加入会话
+4. **`fs.watch` 精准失效**：索引实时跟随文件变更（替代/补充 TTL）
+5. **文件树 reveal**：目录「在文件树中显示」——需要 DSH 文件树先暴露定位 API
+6. **`dir:` 查询提速**：目录段倒排索引（+4.3MB，占总索引 19%），见 `docs/dir-filter-evaluation.md`
 
-1. **查看器编辑/保存**：当前只读。加写入需要 DSH 侧栏的写契约（`fs.write` 已有，但打开路径尚无保存语义），并要处理脏标记与外部改动冲突
-2. **全文搜索模式**：`%query` 前缀切换内容检索（索引已就位，加内容扫描路由即可）
-3. **拼音/首字母匹配**：中文文件名用拼音检索（索引已在内存，客户端加分词映射即可，成本中等）
-4. **多选批量引用**：`Ctrl+Space` 标记多行，一次加入会话
-5. **`fs.watch` 精准失效**：替代/补充 TTL，索引实时跟随文件变更（Windows 支持递归 watch，Linux 需逐目录——跨平台取舍）
-6. **`dir:` 查询提速**：目前 22–48ms（需按路径打分）。可用索引期预计算的目录段倒排索引把候选直接切出来，代价 +4.3MB（占总索引 ~23MB 的 19%），见 `docs/dir-filter-evaluation.md`
-7. **索引截断提示**：walk 触及 `MAX_VISITED`（50 万）时向客户端上报 `indexTruncated`，浮层 footer 显式告警（host 半已在响应中返回该字段，待客户端消费）
+## License
 
+MIT
