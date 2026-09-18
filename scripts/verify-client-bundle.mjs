@@ -579,9 +579,33 @@ if (bars.length === 0) {
 } else {
   ok('find bar renders after Ctrl+F')
   const input = collectByProp(el, 'data-preview-find-input')[0]
-  if (input?.onChange === undefined) {
+  if (input === undefined) {
     fail('the find bar has no input to type into')
   } else {
+    // The input must take the caret ON MOUNT, via a callback ref. An effect
+    // keyed on the open flag runs a frame too early — the bar renders only
+    // after the tracking loop measures the anchor — so the caret never moved
+    // ("Ctrl+F 弹出搜索框后没有自动 focus"). Call the ref the way React would
+    // at mount and require it to focus and select.
+    if (typeof input.ref !== 'function') {
+      fail('the find input has no callback ref — nothing focuses it at mount')
+    } else {
+      const fakeInput = {
+        focused: false,
+        selected: false,
+        focus() { this.focused = true },
+        select() { this.selected = true },
+      }
+      input.ref(fakeInput)
+      if (!fakeInput.focused || !fakeInput.selected) {
+        fail('mounting the find input did not focus+select it — the caret stays wherever it was')
+      } else {
+        ok('find input focuses and selects on mount')
+      }
+    }
+    if (input?.onChange === undefined) {
+      fail('the find bar input has no onChange')
+    } else {
     input.onChange({ target: { value: 'hello' } })
     el = rerender()
     flushRaf(2)
@@ -592,6 +616,7 @@ if (bars.length === 0) {
       fail(`the find bar counted no matches over the preview's text nodes (rendered: ${JSON.stringify(text.slice(0, 120))})`)
     } else {
       ok('find bar counts matches in the preview DOM (1/2)')
+    }
     }
   }
 }

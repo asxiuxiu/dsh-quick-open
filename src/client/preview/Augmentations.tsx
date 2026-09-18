@@ -201,13 +201,20 @@ export function PreviewAugmentations(props: { ctx?: PreviewContext }): ReturnTyp
     return () => window.removeEventListener('keydown', onKey, true)
   }, [pickTarget])
 
-  // The bar takes the caret once it exists; a re-open selects what was typed
-  // before, so repeating the gesture refines rather than restarts.
-  useEffect(() => {
-    if (!findOpen) return
-    inputRef.current?.focus()
-    inputRef.current?.select()
-  }, [findOpen])
+  // The bar takes the caret when its input MOUNTS. An effect keyed on
+  // findOpen cannot do this: the bar renders only once the tracking loop has
+  // measured the anchor (barPos), a frame after the flag flips, so the effect
+  // ran while no input existed and the caret never moved. A stable callback
+  // ref fires exactly at mount — every open is a fresh mount because closing
+  // unmounts the bar. Reopening selects what was typed before, so repeating
+  // the gesture refines rather than restarts.
+  const bindInput = useCallback((element: HTMLInputElement | null): void => {
+    inputRef.current = element
+    if (element !== null) {
+      element.focus()
+      element.select()
+    }
+  }, [])
 
   // Search whenever the bar opens or the query changes.
   useEffect(() => {
@@ -431,7 +438,7 @@ export function PreviewAugmentations(props: { ctx?: PreviewContext }): ReturnTyp
         style: { left: barPos.left, top: barPos.top },
       },
         createElement('input', {
-          ref: inputRef,
+          ref: bindInput,
           value: query,
           placeholder: t('findPlaceholder'),
           'data-preview-find-input': 'true',
