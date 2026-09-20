@@ -1,6 +1,6 @@
 {
   "name": "dsh-quick-open",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DSH web plugin: VSCode-style Ctrl+P quick open — search workspace files with a fuzzy matcher, open them in the native right Sidebar, or drop a file reference into the conversation draft.",
   "license": "MIT",
   "type": "module",
