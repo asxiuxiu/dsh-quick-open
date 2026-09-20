@@ -283,7 +283,7 @@ async function buildEntriesFor(target: WalkRoot, rules: IndexRules): Promise<Ind
         const dir = queue.shift() as string
         active += 1
         void readdir(dir, { withFileTypes: true })
-          .then((dirents) => {
+          .then(async (dirents) => {
             for (const dirent of dirents) {
               visited += 1
               if (visited > MAX_VISITED) {
@@ -292,42 +292,59 @@ async function buildEntriesFor(target: WalkRoot, rules: IndexRules): Promise<Ind
               }
               const absolute = join(dir, dirent.name)
               const path = entryPath(absolute)
+
+              // A directory link (symlink or Windows junction) reports
+              // isDirectory() === false and isSymbolicLink() === true, so a
+              // bare isDirectory() test silently skips every linked directory.
+              // Resolve the link to learn whether it points at a directory.
+              const isLink = dirent.isSymbolicLink()
+              let isDir = dirent.isDirectory()
+              if (!isDir && isLink) {
+                try {
+                  isDir = (await stat(absolute)).isDirectory()
+                } catch {
+                  continue // dangling link
+                }
+              }
+
               const pathLower = path.toLowerCase()
               const nameLower = dirent.name.toLowerCase()
+
+              if (!isDir) {
+                if (!dirent.isFile()) continue
+                if (!matchesFileRules(rules, dirent.name)) continue
+                entries.push({
+                  path,
+                  isDir: false,
+                  nameLower,
+                  pathLower,
+                  ...(isExtra ? { absolute: true } : {}),
+                  ...(label !== undefined ? { rootLabel: label } : {}),
+                })
+                continue
+              }
+
               // Rules match the root-relative path; extra roots use the same
               // vocabulary so `_install` means the same thing everywhere.
               const rulePath = isExtra ? relative(root, absolute).split(sep).join('/') : path
-              if (dirent.isDirectory()) {
-                const verdict = classifyDirectory(matchers, rulePath, dirent.isSymbolicLink())
-                if (verdict === 'skip') continue
-                if (rules.includeDirectories) {
-                  entries.push({
-                    path,
-                    isDir: true,
-                    nameLower,
-                    pathLower,
-                    ...(isExtra ? { absolute: true } : {}),
-                    ...(label !== undefined ? { rootLabel: label } : {}),
-                  })
-                }
-                if (verdict === 'enter') {
-                  seenReal.add(absolute)
-                  queue.push(absolute)
-                } else {
-                  enqueue(absolute)
-                }
-                continue
+              const verdict = classifyDirectory(matchers, rulePath, isLink)
+              if (verdict === 'skip') continue
+              if (rules.includeDirectories) {
+                entries.push({
+                  path,
+                  isDir: true,
+                  nameLower,
+                  pathLower,
+                  ...(isExtra ? { absolute: true } : {}),
+                  ...(label !== undefined ? { rootLabel: label } : {}),
+                })
               }
-              if (!dirent.isFile()) continue
-              if (!matchesFileRules(rules, dirent.name)) continue
-              entries.push({
-                path,
-                isDir: false,
-                nameLower,
-                pathLower,
-                ...(isExtra ? { absolute: true } : {}),
-                ...(label !== undefined ? { rootLabel: label } : {}),
-              })
+              if (verdict === 'enter') {
+                seenReal.add(absolute)
+                queue.push(absolute)
+              } else {
+                enqueue(absolute)
+              }
             }
           })
           .catch(() => {
