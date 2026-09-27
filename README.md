@@ -1,97 +1,99 @@
 # dsh-quick-open
 
-**DSH 的极速文件导航与引用插件**：VSCode 式 `Ctrl+P` 快速打开，外加对内置文件预览的两个刚需增强——文件内查找、选中加入会话。
+**Fast file navigation and referencing for DSH**: VSCode-style `Ctrl+P` quick open, plus two missing pieces of the built-in file preview — find-in-file and add-selection-to-conversation.
 
-> 5 万文件的工作区里，热查询中位数 **5ms**（`node scripts/bench.mjs` 可复现）。
+> Median hot query over a 50,000-file workspace: **5 ms** (reproduce with `node scripts/bench.mjs`).
 
-![Tab 进目录：从 734 项索引里下钻到 Notes/UE/第三阶段-核心层/，直接列出该目录下的笔记](docs/screenshots/quick-open-drill.jpg)
+English | [中文](README.zh.md)
 
-**`Tab` 不只是补全路径**：落到目录上会把列表换成该目录的**直接子项**（目录在前、同级文件在后），可以一层层按进去；继续打字就回到模糊过滤。底部常驻键位提示与索引透明度（条目数 · 新鲜度）。
+![Tab drills into a directory: from a 734-entry index down into Notes/UE/, listing that directory's notes directly](docs/screenshots/quick-open-drill.jpg)
 
-## 它解决什么问题
+**`Tab` does more than complete a path**: landing on a directory swaps the list for that directory's **direct children** (directories first, then sibling files), so you can drill down one level at a time; keep typing and you are back to fuzzy filtering. Key hints and index transparency (entry count · freshness) stay pinned to the footer.
 
-**1. 大仓库里找文件太慢、太难拼。**
-工程仓库动辄几万文件，`client_module.cpp` 这种名字谁记得住全拼？本插件把 VSCode quick-open 的模糊打分器原样移植过来——`clntmod` 就能命中 `client_module.cpp`——再配上每工作区内存索引，按键即出结果。带 `/` 的路径查询做了逐段锚定（`login/index.html` 不会从五个不相干的目录里各借一个字母拼出假命中），`dir:` / `file:` 前缀可以精确限定匹配范围。
+## What it solves
 
-**2. 代码不都在一个仓库里。**
-引擎仓库、游戏仓库、协议仓库并列存放，查一个问题经常要跨仓库跳。本插件的**外置文件夹索引**（`extraRoots`）让任意多个工作区外的目录并入同一个索引——一次 `Ctrl+P` 搜遍所有仓库，结果行带来源徽章（`engine/_source`、`game/_content`…），引用时自动切换成绝对路径。不用开第二个窗口，不用记"这个文件在哪个仓"。
+**1. Finding a file in a large repository is slow, and the names are unguessable.**
+Production repositories run to tens of thousands of files, and nobody remembers how to spell `client_module.cpp`. This plugin ports VSCode's quick-open fuzzy scorer verbatim — `clntmod` finds `client_module.cpp` — over a per-workspace in-memory index, so results appear as you type. Path queries containing `/` are anchored segment by segment (`login/index.html` will not assemble a false hit by borrowing one letter from each of five unrelated directories), and the `dir:` / `file:` prefixes scope a term precisely.
 
-**3. 给 AI 会话补充代码上下文，步骤太碎。**
-找到文件 → 打开 → 选中 → 复制 → 切回输入框 → 粘贴 → 补路径……本插件把这条路压缩成两个动作：`Ctrl+Enter` 直接把文件作为 `@` 引用放进草稿（浮层不关，可以连加好几个）；在文件预览里选中一段代码，点浮出的「加入会话」，自动插入 `@路径:起止行` 的精确引用。
+**2. Your code does not live in one repository.**
+Engine, game, and protocol repositories sit side by side, and chasing one issue means hopping between them. **Extra index roots** (`extraRoots`) fold any number of directories outside the workspace into the same index — one `Ctrl+P` searches every repository, result rows carry a source badge (`engine/_source`, `game/_content`, …), and references switch to absolute paths automatically. No second window, and no remembering which repository a file belongs to.
 
-**4. DSH 内置文件预览不能搜。**
-内置预览什么都能渲染（代码高亮、Markdown、HTML、PDF、图片），唯独没有文件内查找。本插件补上一条 `Ctrl+F` 浮动搜索条——对所有渲染器一视同仁地高亮命中，还顺手做了区分大小写、选区预填、「仅已加载」提示这些细节。**不接管、不替换内置预览，卸载即恢复原样。**
+**3. Feeding code context to an AI conversation takes too many steps.**
+Find file → open → select → copy → switch back to the composer → paste → fix the path… This plugin compresses that into two gestures: `Ctrl+Enter` drops the file into the draft as an `@` reference (the palette stays open, so you can add several in a row); and selecting code in the file preview and clicking the floating "Add to conversation" inserts a precise `@path:start-end` reference.
 
-## 功能
+**4. The built-in DSH file preview cannot search.**
+The built-in preview renders everything (code highlighting, Markdown, HTML, PDF, images) except find-in-file. This plugin adds a `Ctrl+F` floating find bar that highlights matches uniformly across every renderer, with case sensitivity, selection prefill, and a "loaded part only" notice. **It takes over nothing and replaces nothing: uninstalling restores the stock preview exactly.**
 
-### ⚡ 快速打开（`Ctrl+P`）
+## Features
 
-任意会话页面唤出，焦点纪律严格（键盘焦点永不离开搜索框）：
+### ⚡ Quick open (`Ctrl+P`)
 
-| 你要做的 | 怎么做 |
+Summoned from any session page, with strict focus discipline (keyboard focus never leaves the search box):
+
+| What you want | How |
 |---|---|
-| 模糊找文件 | 直接输入，如 `clntmod` 命中 `client_module.cpp` |
-| 按目录定位 | `ui/index.html`（逐段锚定，不会拼假命中） |
-| 跳到指定行 | `main.cpp:120`（内置预览自动滚动并高亮该行） |
-| 精确限定范围 | `dir:ui index.html`（ui 必须是目录段）、`file:index.html`（只匹配文件名），简写 `d:` / `f:`，见下节 |
-| 重开上次文件 | `Ctrl+P` → `Enter`（空查询显示最近使用） |
-| 目录逐级下钻 | `Tab` 补全，目录带 `/` 可连续按 |
-| 引用进会话 | `Ctrl+Enter` 或点行尾「+ 引用」，**不关闭浮层**，可连续添加 |
-| 打开文件 | `Enter`，走 DSH 原生右侧栏，与文件树点击同一条路径 |
+| Fuzzy-find a file | Just type, e.g. `clntmod` matches `client_module.cpp` |
+| Locate by directory | `ui/index.html` (anchored per segment, so no false hits) |
+| Jump to a line | `main.cpp:120` (the built-in preview scrolls to and highlights that line) |
+| Scope a term precisely | `dir:ui index.html` (ui must be a directory segment), `file:index.html` (filename only); shorthand `d:` / `f:` — see below |
+| Reopen the last file | `Ctrl+P` → `Enter` (an empty query shows recently used) |
+| Drill into directories | `Tab` completes; a directory keeps its trailing `/` and can be pressed repeatedly |
+| Reference into the conversation | `Ctrl+Enter`, or click "+ Reference" at the row's end — **the palette stays open**, so you can add several |
+| Open the file | `Enter` — goes through DSH's native right Sidebar, the same path a file-tree click takes |
 
-- 匹配字符逐段高亮；深路径的目录部分**前置省略**，永远保住区分结果的那段
-- 每工作区索引规则可配（设置页）：排除目录、强制包含生成目录、后缀白名单、是否索引目录
-- **呼出快捷键可自定义**（设置页）：呼出面板、预览内搜索、加入会话三个动作都能改；默认 `Ctrl+P` / `Ctrl+F` / `Ctrl+Enter`，macOS 上按 `Cmd`
-- footer 常驻索引透明度（条目数 · 新鲜度）与键位提示
+- Matched characters are highlighted per segment; a deep path's directory part is **front-elided**, so the segment that distinguishes one row from another is never the part that gets clipped
+- Index rules are configurable per workspace (settings page): excluded directories, force-included generated directories, extension allowlist, whether directory entries are indexed
+- **Every shortcut is customizable** (settings page): the palette, the in-preview search, and the reference gesture can all be rebound; defaults are `Ctrl+P` / `Ctrl+F` / `Ctrl+Enter`, or `Cmd` on macOS
+- The footer permanently shows index transparency (entry count · freshness) and key hints
 
-#### ⌨️ 快捷键可自定义
+#### ⌨️ Customizable shortcuts
 
-三个动作都能改，默认值贴合各平台习惯：
+All three actions can be rebound, with defaults that match each platform's habits:
 
-| 动作 | 默认 | 说明 |
+| Action | Default | Notes |
 |---|---|---|
-| 呼出快速打开面板 | `Ctrl+P` / macOS `Cmd+P` | 任意会话页面按下即可；再按一次关闭 |
-| 在文件预览里搜索内容 | `Ctrl+F` / macOS `Cmd+F` | 焦点在侧边栏预览里时生效，打开浮动查找条 |
-| 把选中文件加入对话 | `Ctrl+Enter` / macOS `Cmd+Enter` | 面板内按住修饰键回车，引用进草稿且**不关闭**面板 |
+| Open the quick-open palette | `Ctrl+P` / macOS `Cmd+P` | Works on any session page; press again to close |
+| Search within the file preview | `Ctrl+F` / macOS `Cmd+F` | Applies while the sidebar preview has focus; opens the floating find bar |
+| Add the highlighted file to the conversation | `Ctrl+Enter` / macOS `Cmd+Enter` | Hold the modifier and press Enter inside the palette; the reference lands in the draft and the palette **stays open** |
 
-到设置页点一下录制按钮，按一次新组合即可，**立即生效不用刷新**。
+Open the settings page, click the record button, and press the new combination once — it takes effect **immediately, with no reload**.
 
-两点设计：
+Two design decisions:
 
-- **跨平台按各自习惯解释**。设置里存的是「主修饰键」而不是写死的 Ctrl 或 Cmd，所以同一份配置在 macOS 上按 Cmd、在 Windows 上按 Ctrl——两边都符合本机习惯，不用分别配。
-- **必须带修饰键**（其中 `Enter` 可单独作为主键）。不接受裸字母绑定，否则打字就会触发；录制时会直接拒绝并说明原因。
+- **Each platform interprets the primary modifier its own way.** What gets stored is "the primary modifier", not a hardcoded Ctrl or Cmd, so one configuration means Cmd on macOS and Ctrl on Windows — correct on both, with nothing to configure twice.
+- **A modifier is required** (though `Enter` may be the main key on its own). Bare-letter bindings are refused, because they would fire while you type; the recorder rejects them outright and explains why.
 
-> ⚠️ **macOS 用户注意**：早期版本接受 `Ctrl+P` 或 `Cmd+P` 两种按法，现在默认**只认 `Cmd+P`**。如果您习惯按 `Ctrl+P`，到设置页重录一次即可（或直接接受 `Cmd+P`，它才是 macOS 的标准）。
+> ⚠️ **macOS users**: earlier versions accepted either `Ctrl+P` or `Cmd+P`; the default now recognises **`Cmd+P` only**. If you are used to `Ctrl+P`, re-record it on the settings page (or just adopt `Cmd+P`, which is the macOS standard).
 
-#### 🎯 `dir:` 与 `file:` —— 限定这段文字该匹配哪里
+#### 🎯 `dir:` and `file:` — scoping where a term is allowed to match
 
-一个查询由空格切成若干片段，每个片段可以用前缀限定**它在路径的哪一部分才算命中**：
+A query is split on spaces into terms, and each term may carry a prefix restricting **which part of the path counts as a match**:
 
-| 写法 | 含义 | 例子 |
+| Spelling | Meaning | Example |
 |---|---|---|
-| `dir:ui` | 必须命中**某个目录段**，文件名不算 | `.../ui/coherent/bag/index.html` ✓<br>`ui_helpers.cpp`（只是文件名带 ui）✗ |
-| `file:main.cpp` | 必须命中**文件名**，目录不算 | `.../camera/main.cpp` ✓<br>`.../main.cpp/helper.txt` ✗ |
-| `d:` / `f:` | 同上，简写 | `d:ui f:index.html` |
-| 无前缀 | 文件名优先，路径查询时回退到整条路径 | `clntmod`、`ui/index.html` |
+| `dir:ui` | Must match a **directory segment**; the filename does not count | `.../ui/coherent/bag/index.html` ✓<br>`ui_helpers.cpp` (ui only in the filename) ✗ |
+| `file:main.cpp` | Must match the **filename**; directories do not count | `.../camera/main.cpp` ✓<br>`.../main.cpp/helper.txt` ✗ |
+| `d:` / `f:` | The same, abbreviated | `d:ui f:index.html` |
+| no prefix | Filename first, falling back to the whole path for path queries | `clntmod`, `ui/index.html` |
 
-可以混用，每个片段各管各的：
+Prefixes mix freely, each term governing itself:
 
 ```
-dir:camera file:manager      目录里有 camera 段，且文件名含 manager
-dir:client cpp               client 必须是目录段，cpp 照常模糊匹配文件名
+dir:camera file:manager      a camera segment in the path, and "manager" in the filename
+dir:client cpp               client must be a directory segment; cpp fuzzy-matches the filename as usual
 ```
 
-两个要点，实测确认：
+Two properties, confirmed by measurement:
 
-- **匹配位置会如实高亮**。`dir:camera` 只高亮路径里的 `camera/`，文件名一个字母都不亮；`file:camera` 反之。看高亮就知道哪个片段命中了哪里。
-- **`dir:` 要求目录名连续出现，`file:` 允许缩写**。这是刻意的不对称：目录是靠打出名字来点的（`dir:camera` 不会命中 `.../chaos_client_camera_effect_manager.cpp` 这种只是文件名带 camera 的），而文件名往往靠缩写抵达（`file:clntmod` 能命中 `client_module.cpp`）。
-  所以 **`dir:clntmod` 找不到东西是正常的**——没有哪个目录段连续包含这串字母。想缩写找文件就用 `file:` 或不带前缀。
+- **Match positions are highlighted faithfully.** `dir:camera` highlights only `camera/` in the path and not a single letter of the filename; `file:camera` is the reverse. The highlight tells you which term matched where.
+- **`dir:` requires the directory name to appear contiguously; `file:` allows abbreviations.** This asymmetry is deliberate: directories are targeted by typing their name (`dir:camera` will not match `.../chaos_client_camera_effect_manager.cpp`, whose filename merely contains "camera"), whereas filenames are usually reached by abbreviation (`file:clntmod` matches `client_module.cpp`).
+  So **`dir:clntmod` finding nothing is expected** — no directory segment contains those letters contiguously. Use `file:` or no prefix to abbreviate a filename.
 
-不写前缀时，`dir:` / `file:` 的行为完全不变：`clntmod`、`ui/index.html`、`main.cpp:120` 都照旧。
+With no prefix, `dir:` / `file:` change nothing: `clntmod`, `ui/index.html`, and `main.cpp:120` all behave as before.
 
-#### 📦 外置文件夹索引（`extraRoots`）
+#### 📦 Extra index roots (`extraRoots`)
 
-把工作区之外的任意目录并入同一个索引，多仓库开发不用切换上下文：
+Fold any directory outside the workspace into the same index, so multi-repository work needs no context switching:
 
 ```jsonc
 {
@@ -102,111 +104,126 @@ dir:client cpp               client 必须是目录段，cpp 照常模糊匹配�
 }
 ```
 
-- 一次 `Ctrl+P` 搜遍所有根；结果行带来源徽章，深路径也能一眼认出是哪个仓
-- 引用外置根的文件自动用绝对路径（`@E:/dev/engine/...`），AI 照常能读
-- 每个根复用同一套排除/后缀规则，但按**各根自身**的相对路径匹配——某个根恰好位于名叫 `build` 的目录下，也不会被工作区自己的 `build` 排除规则误伤
-- 跟随符号链接时逐根防环，目录不可读只跳过那一层，不会拖垮整个索引
+- One `Ctrl+P` searches every root; result rows carry a source badge, so a deep path is still instantly attributable to a repository
+- Referencing a file from an extra root uses an absolute path (`@E:/dev/engine/...`) automatically, and the AI can read it as usual
+- Every root reuses the same exclude/extension rules, but matched against **its own** relative paths — a root that happens to sit under a directory named `build` is not caught by the workspace's own `build` exclude
+- Symlink traversal is cycle-guarded per root, and an unreadable directory skips only that level rather than stalling the whole index
 
-### 🔍 文件预览增强
+### 🔍 File preview enhancements
 
-内置预览原有的渲染器切换、分页加载、变更提示、换行、行号跳转全部保留，本插件只加两样：
+The built-in preview keeps its renderer switching, paged loading, change notices, line wrapping, and line jumps. This plugin adds exactly two things:
 
-**文件内查找（`Ctrl+F`）**
-- 浮动搜索条，随输入即时高亮全部命中（CSS Custom Highlight API，不改动预览的 DOM）
-- 纯文本、代码高亮、Markdown 渲染视图通吃；`Enter` / `Shift+Enter` 前后跳转
-- 选中一段文本再按 `Ctrl+F`，自动预填为查询词
-- `Aa` 区分大小写开关（记住你的偏好）
-- 分页加载的大文件会明确提示「仅已加载」——「无结果」不会被误读为「文件里没有」
-- `Esc` 随处可关（不用先把焦点点回搜索框）
+**Find in file (`Ctrl+F`)**
+- A floating find bar that highlights every match as you type (CSS Custom Highlight API; the preview's DOM is not modified)
+- Works across plain text, highlighted code, and rendered Markdown views; `Enter` / `Shift+Enter` step through matches
+- Select some text, then press `Ctrl+F`, and it is prefilled as the query
+- An `Aa` case-sensitivity toggle that remembers your preference
+- A large paged file says "loaded part" explicitly, so "no results" is not misread as "not in the file"
+- `Esc` closes it from anywhere (no need to click back into the search box first)
 
-**选中即引用**
-- 在预览里选中任意文本 → 点浮出的「加入会话」→ 插入 `@相对路径:起止行`
-- Markdown 等渲染视图里同样可用（无行号时退化为 `@路径`）
-- 引用格式三选一（设置页）：仅位置（默认，最省上下文）/ 位置+读取提示 / 围栏代码块（自包含）
+**Select to reference**
+- Select any text in the preview → click the floating "Add to conversation" → an `@relative/path:start-end` reference is inserted
+- Works in rendered views such as Markdown too (degrading to a bare `@path` when the renderer exposes no line numbers)
+- Three reference formats (settings page): location only (the default, cheapest in context) / location + read hint / fenced code block (self-contained)
 
-<!-- 截图位：建议补三张——Ctrl+P 结果列表、文件内查找高亮、选中浮框 -->
+<!-- Screenshot slots: ideally three — the Ctrl+P result list, find-in-file highlighting, and the selection popup -->
 
-## 安装
+## Install
 
 ```bash
-dsh plugin --profile web add github:asxiuxiu/dsh-quick-open   # GitHub 源
-dsh plugin --profile web add dsh-quick-open                   # npm 源
-dsh plugin --profile web add link:D:/dev/dsh-quick-open       # 本地开发
+dsh plugin --profile web add dsh-quick-open                   # from npm
+dsh plugin --profile web add github:asxiuxiu/dsh-quick-open   # from GitHub
+dsh plugin --profile web add link:D:/dev/dsh-quick-open       # local development
 ```
 
-安装后**重启 DSH**（host 半只在 boot 时挂载）。只依赖 DSH 本体，不依赖任何第三方侧边栏插件。
+**Restart DSH after installing** (the host half mounts only at boot). It depends on DSH itself and on no third-party sidebar plugin.
 
-## 配置（可选）
+## Configuration (optional)
 
-开箱即用：没有配置文件时使用内置的**语言中立、项目中立**默认规则（只排除各生态公认的噪音目录 + 跨语言通用源码后缀）。
+It works out of the box: with no config file it uses built-in **language-neutral, project-neutral** defaults (excluding only the noise directories every ecosystem agrees on, plus source extensions common across languages).
 
-需要定制时，「设置 → Quick Open 索引」编辑**当前工作区**的 `.dsh/quick-open.json`：
+To customize, open **Settings → Quick Open index** and edit the **current workspace's** `.dsh/quick-open.json`:
 
 ```jsonc
 {
   "version": 1,
-  "excludeDirs": ["_install", "build/Engine"],      // 裸名字任意深度；带斜杠锚定根；**/ 任意深度
-  "includeDirs": ["build/p/include"],               // 优先级高于排除——救回被误伤的生成树
+  "excludeDirs": ["_install", "build/Engine"],      // bare name at any depth; with a slash, anchored to the root; **/ for any depth
+  "includeDirs": ["build/p/include"],               // takes precedence over excludes — rescues a wrongly swept generated tree
   "includeExtensions": [".h", ".cpp", ".py", ".md"],
   "includeFilenames": ["CMakeLists.txt"],
   "includeDirectories": true,
-  "extraRoots": [                                    // 工作区外的目录一并索引
+  "extraRoots": [                                    // directories outside the workspace, indexed together
     { "path": "E:\\path\\to\\sibling-repo\\_source", "label": "sibling/_source" }
   ]
 }
 ```
 
-保存原子写入、3 秒内生效、无需重启。规则为什么按工作区存放、后缀白名单的固有盲区、`includeDirs` 为什么能救回生成树——详见下文架构与 `docs/`。
+Saving is atomic, takes effect within 3 seconds, and needs no restart. Why the rules are stored per workspace, the inherent blind spot of an extension allowlist, and why `includeDirs` can rescue a generated tree — see the architecture section below and `docs/`.
 
-## 技术亮点
+## Technical highlights
 
-- **匹配器是 VSCode quick-open 打分器的移植**（`fuzzyScorer.ts` + `filters.ts`，常数与分档取自源码）。先试过 8 种自创方案，每一种都在另一组查询上崩掉；VSCode 的 `1<<16` 量级分档基数从根本上决定了「命中文件名」永远压过「命中路径」，**没有需要调的权重**。实验与负结果：`docs/matching-research.md`
-- **路径查询逐段锚定**：不锚定时 `login/index.html` 实测有 27,002 条散落假命中（占全库 52.7%），正确答案埋在 130:1 的噪音里；锚定后从 620 条收敛到 7 条、全部正确
-- **索引管线**：16 路并行 `readdir` 建每工作区内存索引，TTL 30s + stale-while-revalidate 保鲜，配置改动 3 秒内热感知，配置写入原子化
-- **预览增强是 DOM 层装饰**：不注册 tab 类型、不补丁任何 DSH 包；查找高亮走 CSS Custom Highlight API，不触碰 React 托管的节点；选区引用直接读文档选区——因此对所有渲染器（含 PDF 文本层）一致生效
-- **验证纪律**：构建产物跑端到端桩测试（注册契约、键盘路由、搜索计数、引用写入、层级契约），关键断言都经过「故意改坏必须失败」的有效性验证
+- **The matcher is a port of VSCode's quick-open scorer** (`fuzzyScorer.ts` + `filters.ts`, with constants and score tiers taken from the source). Eight original schemes were tried first, and every one broke on another set of queries; VSCode's `1<<16`-scale tiering fundamentally guarantees that "matched the filename" always outranks "matched the path" — **there are no weights to tune**. Experiments and negative results: `docs/matching-research.md`
+- **Path queries are anchored per segment**: unanchored, `login/index.html` measured 27,002 scattered false hits (52.7% of the index), burying the correct answer in 130:1 noise; anchored, it converges from 620 candidates to 7, all correct
+- **Index pipeline**: 16-way parallel `readdir` builds a per-workspace in-memory index, kept fresh by a 30 s TTL with stale-while-revalidate, noticing config changes within 3 seconds, with atomic config writes
+- **The preview enhancement is a DOM-layer decoration**: it registers no tab type and patches no DSH package; find highlighting uses the CSS Custom Highlight API and never touches React-managed nodes; selection referencing reads the document selection directly — which is why it works uniformly across every renderer (including the PDF text layer)
+- **Verification discipline**: the built artifacts run through end-to-end stub tests (registration contract, keyboard routing, match counts, reference writes, layering contract), and the load-bearing assertions are each validated by "deliberately break it, it must fail"
 
-## 开发
+## Development
 
 ```bash
 npm install
-npm run build       # 产出 lib/index.js（host：索引路由）+ lib/client.js（__ModuleLoader__ 封装，约 80KB）
+npm run build       # emits lib/index.js (host: the index routes) + lib/client.js (the __ModuleLoader__ envelope, ~80KB)
 npm run typecheck
+npm run check       # typecheck + build + the client-bundle suite
 
-# 验证脚本
-node scripts/verify.mjs                  # 匹配质量回归
-node scripts/verify-no-regression.mjs    # 不含分隔符的查询行为逐条对比
-node scripts/verify-grammar.mjs          # dir:/file: 前缀解析边界
-node --experimental-strip-types scripts/verify-file-address.mjs   # 文件地址 / @ 引用 / :行号 后缀
-node --experimental-strip-types scripts/verify-preview.mjs        # 预览增强纯逻辑
-node scripts/verify-client-bundle.mjs    # 构建产物的端到端桩测试
-node --expose-gc scripts/eval-cost.mjs   # 索引体积基线
-node scripts/eval-ambiguity.mjs          # 目录名歧义量化
+# Verification scripts
+node scripts/verify-i18n.mjs             # key parity, no untranslated/empty values, placeholder survival
+node scripts/verify-client-bundle.mjs    # end-to-end stub test of the built artifact (incl. Ctrl+P being claimed)
+node scripts/verify-grammar.mjs          # dir:/file: prefix parsing boundaries
+node --experimental-strip-types scripts/verify-file-address.mjs   # file addresses / @ references / :line suffix
+node --experimental-strip-types scripts/verify-preview.mjs        # preview-augmentation pure logic
+node scripts/verify.mjs                  # match-quality regression
+node scripts/verify-no-regression.mjs    # per-case comparison of separator-less query behaviour
+node --expose-gc scripts/eval-cost.mjs   # index size baseline
+node scripts/eval-ambiguity.mjs          # quantifying directory-name ambiguity
 ```
 
-## 架构
+> Some scripts (`verify.mjs`, `verify-children.mjs`, `verify-drill.mjs`, `verify-no-regression.mjs`) read a real workspace at a hardcoded path and exit with `ENOENT` unless that path exists. Point them at your own checkout before running.
+
+## Architecture
 
 ```
-src/rules.ts            索引规则：目录匹配（子树语义 + **/ glob）/ 文件过滤 / 配置解析
-src/match.ts            VSCode 打分器移植 + dir:/file: 作用域前缀解析
-src/index.ts            host 半：/quick-open/api/{search,children,probe,config.get,config.set,config.reset}
-src/client/index.tsx    client 入口：全局快捷键监听 + 预览增强挂载 + slot 注册
-src/client/controller.ts 搜索管线（查询缓存/索引路由/目录下钻）、:行号 解析、打开、引用、最近记录
-src/client/quick-open.tsx 浮层组件（portal 到 body，z-index 10000，多段高亮）
-src/client/settings.tsx 设置面板：索引规则 + 引用格式 + 呼出快捷键录制
-src/client/shortcut.ts  快捷键：跨平台主修饰键映射、匹配、录制、校验、持久化
-src/client/preview/     预览增强：查找条（Highlight API）+ 选中浮框 + DOM 探测（全部优雅降级）
-docs/                   匹配调研、目录筛选评估、侧边栏集成调研、架构说明（含大量实测数据与负结果）
+src/rules.ts             index rules: directory matching (subtree semantics + **/ globs) / file filtering / config parsing
+src/match.ts             the VSCode scorer port + dir:/file: scope-prefix parsing
+src/index.ts             host half: /quick-open/api/{search,children,probe,config.get,config.set,config.reset}
+src/client/index.tsx     client entry: global shortcut listener + preview-augmentation mount + slot registrations
+src/client/i18n.ts       every user-visible string, in English and Chinese, with language resolution
+src/client/controller.ts the search pipeline (query cache / index route / directory drill), :line parsing, open, reference, recents
+src/client/quick-open.tsx the palette component (portal to body, z-index 10000, multi-segment highlighting)
+src/client/settings.tsx  settings panel: index rules + reference format + shortcut recording
+src/client/shortcut.ts   shortcuts: cross-platform primary-modifier mapping, matching, recording, validation, persistence
+src/client/preview/      preview augmentation: find bar (Highlight API) + selection popup + DOM probing (all gracefully degrading)
+docs/                    matching research, directory-filter evaluation, sidebar integration research, architecture notes (with measurements and negative results)
 ```
 
-## 路线图
+## Internationalization
 
-1. **全文搜索模式**：`%query` 前缀切换内容检索
-2. **拼音/首字母匹配**：中文文件名的拼音检索
-3. **多选批量引用**：`Ctrl+Space` 标记多行，一次加入会话
-4. **`fs.watch` 精准失效**：索引实时跟随文件变更（替代/补充 TTL）
-5. **文件树 reveal**：目录「在文件树中显示」——需要 DSH 文件树先暴露定位 API
-6. **`dir:` 查询提速**：目录段倒排索引（+4.3MB，占总索引 19%），见 `docs/dir-filter-evaluation.md`
+The plugin ships **English and Chinese**. Language follows the DSH shell's own locale preference (`<html lang>`), is re-read on every lookup so switching needs no reload, and anything that is not `zh*` resolves to English.
+
+Every user-visible string lives in one table, `src/client/i18n.ts`. That is enforced rather than merely intended:
+
+- Both tables are typed `Messages`, so a key added to English and forgotten in Chinese is a **compile error**
+- `scripts/verify-i18n.mjs` asserts key parity, rejects empty values, rejects a Chinese value identical to its English counterpart (a forgotten translation), and requires every `{placeholder}` to survive translation
+- The language switch reaches the **composer draft text**, not just the UI chrome — `verify-i18n.mjs` covers that too
+
+## Roadmap
+
+1. **Full-text search mode**: a `%query` prefix switching to content search
+2. **Pinyin / initial matching**: romanized search for Chinese filenames
+3. **Multi-select batch reference**: `Ctrl+Space` to mark several rows and add them in one action
+4. **Precise `fs.watch` invalidation**: keep the index live with file changes (replacing or supplementing the TTL)
+5. **File-tree reveal**: "reveal in file tree" for a directory — needs DSH's file tree to expose a locate API first
+6. **Faster `dir:` queries**: an inverted index over directory segments (+4.3 MB, 19% of the total index), see `docs/dir-filter-evaluation.md`
 
 ## License
 

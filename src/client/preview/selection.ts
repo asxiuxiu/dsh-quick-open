@@ -19,6 +19,7 @@
  * channel dsh-quick-open's own reference insert uses — no plugin-specific
  * route, no chip-coordinate tricks.
  */
+import { t } from '../i18n.ts'
 
 /** How a selection is written into the composer draft. */
 export type SelectionFormat = 'path' | 'path-hint' | 'content'
@@ -130,11 +131,13 @@ export function buildSelectionText(input: ReferenceInput): string | undefined {
   }
   if (format === 'path-hint') {
     if (lines === undefined) return location
-    const span = lines.end > lines.start ? `第 ${lines.start}-${lines.end} 行` : `第 ${lines.start} 行`
+    const span = lines.end > lines.start
+      ? t('selectionLineSpan', { start: lines.start, end: lines.end })
+      : t('selectionSingleLine', { line: lines.start })
     const tooLong = lines.end - lines.start + 1 > HINT_LINES_SUGGESTED
-      ? '范围较长，可只读取其中相关部分。'
+      ? t('selectionSpanLong')
       : ''
-    return `${location}（${span}，请用 read 工具读取该文件的这一段）${tooLong}`
+    return `${location}（${span}，${t('selectionReadHint')}）${tooLong}`
   }
   return location
 }

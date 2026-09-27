@@ -16,16 +16,17 @@ import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { Context, SessionScope } from './types.ts'
 import { readActiveScope } from './controller.ts'
+import { t } from './i18n.ts'
 import { readSelectionFormat, writeSelectionFormat, type SelectionFormat } from './preview/selection.ts'
 import {
   DEFAULT_SHORTCUTS,
   SHORTCUT_ACTIONS,
-  SHORTCUT_HINTS,
-  SHORTCUT_LABELS,
   describeShortcut,
   isMacPlatform,
   readShortcuts,
   shortcutFromEvent,
+  shortcutHint,
+  shortcutLabel,
   writeShortcut,
   type Shortcut,
   type ShortcutAction,
@@ -311,7 +312,7 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
     setError(null)
     try {
       await post('config.set', { sessionId: scope.sessionId, cwd: scope.cwd, rules })
-      setStatus('已保存，正在按新规则重建索引…')
+      setStatus(t('settingsSaved'))
       setConfigExists(true)
       // The rebuild runs in the host; a follow-up read reports the new count.
       window.setTimeout(() => {
@@ -333,7 +334,7 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
     try {
       await post('config.reset', { sessionId: scope.sessionId, cwd: scope.cwd })
       await load(scope)
-      setStatus('已删除配置文件，恢复内置默认规则。')
+      setStatus(t('settingsReset'))
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure))
     } finally {
@@ -347,7 +348,7 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
   // to edit — there is nothing workspace-scoped about it.
   const viewerSection = (
     <div style={styles.field}>
-      <div style={styles.label}>文件查看器：选中文本加入会话的格式</div>
+      <div style={styles.label}>{t('viewerLabel')}</div>
       <select
         style={styles.select}
         value={selectionFormat}
@@ -357,17 +358,11 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
           writeSelectionFormat(next)
         }}
       >
-        <option value="path">仅位置：@path/file.cpp:12-15</option>
-        <option value="path-hint">位置 + 提示模型去读取该段</option>
-        <option value="content">位置 + 围栏代码块（带上选中内容）</option>
+        <option value="path">{t('viewerOptionPath')}</option>
+        <option value="path-hint">{t('viewerOptionHint')}</option>
+        <option value="content">{t('viewerOptionContent')}</option>
       </select>
-      <div style={styles.hint}>
-        在侧边栏文件里选中文本后点「加入会话」时插入的内容。
-        <br />
-        <strong>仅位置</strong>最省上下文，模型自行读取所需范围；
-        <strong>位置 + 提示</strong>多一句「请用 read 读取该段」，能减少模型忽略行号的情况；
-        <strong>围栏代码块</strong>把选中内容一并带入，代价是每轮都重复这段代码。
-      </div>
+      <div style={styles.hint}>{t('viewerHint')}</div>
     </div>
   )
 
@@ -377,10 +372,10 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
   // Every gesture is app-wide too, so this section renders in both branches.
   const shortcutSection = (
     <div style={styles.field}>
-      <div style={styles.label}>快捷键</div>
+      <div style={styles.label}>{t('shortcutLabel')}</div>
       {SHORTCUT_ACTIONS.map((action) => (
         <div key={action} style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
-          <div style={styles.hint}>{SHORTCUT_LABELS[action]}</div>
+          <div style={styles.hint}>{shortcutLabel(action)}</div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button
               type="button"
@@ -390,7 +385,7 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
               onKeyDown={(event) => onRecorderKeyDown(event, action)}
             >
               {recording === action
-                ? '按下新的快捷键…（Esc 取消）'
+                ? t('shortcutRecording')
                 : describeShortcut(shortcuts[action], isMacPlatform())}
             </button>
             <button
@@ -405,18 +400,17 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
               }}
               disabled={recording !== null}
             >
-              恢复默认
+              {t('shortcutRestore')}
             </button>
           </div>
-          <div style={styles.hint}>{SHORTCUT_HINTS[action]}</div>
+          <div style={styles.hint}>{shortcutHint(action)}</div>
         </div>
       ))}
       <div style={{ ...styles.hint, marginTop: 6 }}>
-        点按钮再按一次新的组合键即可（必须带修饰键；Enter 也可单独作为主键）。
-        <br />
-        {isMacPlatform() ? 'Cmd' : 'Ctrl'} 是{isMacPlatform() ? 'macOS' : '本平台'}的主修饰键——
-        同一份配置换到{isMacPlatform() ? ' Windows 会按 Ctrl' : ' macOS 会按 Cmd'}解释，
-        所以跨平台的习惯都能对上。
+        {t('shortcutHint', {
+          modifier: isMacPlatform() ? 'Cmd' : 'Ctrl',
+          platform: isMacPlatform() ? 'macOS' : 'Windows / Linux',
+        })}
         {shortcutError !== null && (
           <>
             <br />
@@ -431,10 +425,9 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
     return (
       <div style={styles.root}>
         <div style={{ ...styles.banner, ...styles.bannerWarn }}>
-          当前没有活跃会话，无法确定要编辑哪个工作区。
+          {t('noWorkspaceTitle')}
           <br />
-          索引规则按工作区存放（<code>.dsh/quick-open.json</code> 位于工作区根目录下），
-          请先打开一个会话再回到此面板。
+          {t('noWorkspaceBody')}
         </div>
         {viewerSection}
         {shortcutSection}
@@ -445,14 +438,14 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
   return (
     <div style={styles.root}>
       <div style={{ ...styles.banner, ...styles.bannerOk }}>
-        <div>当前工作区</div>
+        <div>{t('currentWorkspace')}</div>
         <div style={styles.path}>{scope?.cwd}</div>
         <div style={{ ...styles.hint, marginTop: 6 }}>
-          配置文件：
+          {t('configFile')}
           <span style={styles.path}>{configPath}</span>
-          {configExists ? '（已存在）' : '（不存在，当前使用内置默认规则）'}
+          {configExists ? t('configExists') : t('configMissing')}
           {' · '}
-          已索引 <strong>{indexedEntries.toLocaleString()}</strong> 项
+          {t('indexedEntries', { count: indexedEntries.toLocaleString() })}
         </div>
       </div>
 
@@ -461,7 +454,7 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
       {shortcutSection}
 
       <div style={styles.field}>
-        <div style={styles.label}>排除目录 excludeDirs</div>
+        <div style={styles.label}>{t('excludeDirsLabel')}</div>
         <textarea
           style={{ ...styles.textarea, ...(readOnly ? styles.textareaReadonly : {}) }}
           readOnly={readOnly}
@@ -469,14 +462,11 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
           value={toLines(rules.excludeDirs)}
           onChange={event => setRules(prev => ({ ...prev, excludeDirs: fromLines(event.target.value) }))}
         />
-        <div style={styles.hint}>
-          每行一个，相对工作区根。<code>build/go</code> 只匹配该目录；
-          <code>**/shaders/d3d11</code> 匹配任意深度下同名目录。目录被排除后整棵子树都不遍历。
-        </div>
+        <div style={styles.hint}>{t('excludeDirsHint')}</div>
       </div>
 
       <div style={styles.field}>
-        <div style={styles.label}>强制包含目录 includeDirs</div>
+        <div style={styles.label}>{t('includeDirsLabel')}</div>
         <textarea
           style={{ ...styles.textarea, ...(readOnly ? styles.textareaReadonly : {}) }}
           readOnly={readOnly}
@@ -484,14 +474,11 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
           value={toLines(rules.includeDirs)}
           onChange={event => setRules(prev => ({ ...prev, includeDirs: fromLines(event.target.value) }))}
         />
-        <div style={styles.hint}>
-          优先级高于排除目录。用于救回被父级排除但确实需要的生成树，
-          例如 <code>build/p/include</code>（生成的头文件，源码会 include）。
-        </div>
+        <div style={styles.hint}>{t('includeDirsHint')}</div>
       </div>
 
       <div style={styles.field}>
-        <div style={styles.label}>包含后缀 includeExtensions</div>
+        <div style={styles.label}>{t('includeExtensionsLabel')}</div>
         <textarea
           style={{ ...styles.textarea, ...(readOnly ? styles.textareaReadonly : {}) }}
           readOnly={readOnly}
@@ -499,14 +486,11 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
           value={toLines(rules.includeExtensions)}
           onChange={event => setRules(prev => ({ ...prev, includeExtensions: fromLines(event.target.value) }))}
         />
-        <div style={styles.hint}>
-          每行一个，带点，如 <code>.cpp</code>。只有这些后缀的文件进索引。
-          <strong>留空表示不按后缀过滤</strong>（索引遍历到的所有文件）。
-        </div>
+        <div style={styles.hint}>{t('includeExtensionsHint')}</div>
       </div>
 
       <div style={styles.field}>
-        <div style={styles.label}>包含文件名 includeFilenames</div>
+        <div style={styles.label}>{t('includeFilenamesLabel')}</div>
         <textarea
           style={{ ...styles.textarea, ...(readOnly ? styles.textareaReadonly : {}) }}
           readOnly={readOnly}
@@ -514,10 +498,7 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
           value={toLines(rules.includeFilenames)}
           onChange={event => setRules(prev => ({ ...prev, includeFilenames: fromLines(event.target.value) }))}
         />
-        <div style={styles.hint}>
-          每行一个完整文件名（不区分大小写），不受后缀过滤限制。
-          用于 <code>CMakeLists.txt</code> 这类需要保留的名字。
-        </div>
+        <div style={styles.hint}>{t('includeFilenamesHint')}</div>
       </div>
 
       <div style={styles.field}>
@@ -529,12 +510,12 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
             checked={rules.includeDirectories}
             onChange={event => setRules(prev => ({ ...prev, includeDirectories: event.target.checked }))}
           />
-          <span>索引目录条目（关闭后无法在快速打开面板里引用 <code>@dir/</code>）</span>
+          <span>{t('includeDirectoriesLabel')}</span>
         </label>
       </div>
 
       <div style={styles.field}>
-        <div style={styles.label}>额外索引根 extraRoots</div>
+        <div style={styles.label}>{t('extraRootsLabel')}</div>
         <textarea
           style={{ ...styles.textarea, ...(readOnly ? styles.textareaReadonly : {}) }}
           readOnly={readOnly}
@@ -547,11 +528,7 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
             extraRoots: fromLines(event.target.value).map(parseExtraRootLine),
           }))}
         />
-        <div style={styles.hint}>
-          每行一个<strong>绝对目录路径</strong>，可加 <code>| 别名</code> 指定结果行里显示的前缀。
-          用于索引工作区<b>之外</b>的目录——例如引擎仓库与游戏仓库是并列的两个文件夹，开发时需要互查。
-          这些目录用与工作区相同的目录/后缀规则遍历，结果行以完整绝对路径显示。
-        </div>
+        <div style={styles.hint}>{t('extraRootsHint')}</div>
       </div>
 
       <div style={styles.actions}>
@@ -561,7 +538,7 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
           disabled={readOnly || saving}
           onClick={() => void save()}
         >
-          {saving ? '保存中…' : '保存到工作区'}
+          {saving ? t('saving') : t('save')}
         </button>
         <button
           type="button"
@@ -569,7 +546,7 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
           disabled={readOnly || saving}
           onClick={() => void reset()}
         >
-          恢复默认
+          {t('reset')}
         </button>
         <button
           type="button"
@@ -577,7 +554,7 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
           disabled={readOnly || saving}
           onClick={() => void load(scope)}
         >
-          重新读取
+          {t('reload')}
         </button>
         {status !== null ? <span style={styles.status}>{status}</span> : null}
         {error !== null ? <span style={styles.statusError}>{error}</span> : null}
@@ -595,10 +572,19 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
  */
 const readScope = readActiveScope
 
-/** The slot registration consumed by the client entry's `apply`. */
+/**
+ * The slot registration consumed by the client entry's `apply`.
+ *
+ * `label` is a GETTER rather than a string: the settings sidebar reads it when
+ * it renders the section list, and the shell can change the language without a
+ * reload. A captured string would keep the previous language until the page was
+ * refreshed.
+ */
 export const quickOpenSettingsSection = {
   name: 'settings.section' as const,
   id: 'dsh-quick-open',
   order: 60,
-  label: 'Quick Open 索引',
+  get label(): string {
+    return t('settingsSection')
+  },
 }

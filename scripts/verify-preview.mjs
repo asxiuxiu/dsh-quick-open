@@ -11,6 +11,13 @@ import { parseFileAddress } from '../src/client/preview/address.ts'
 import { buildSelectionText, mentionOf, DEFAULT_SELECTION_FORMAT } from '../src/client/preview/selection.ts'
 import { matchSpans, MATCH_LIMIT } from '../src/client/preview/find.ts'
 
+// `buildSelectionText` renders localized copy through `../i18n.ts`, which reads
+// the language off `<html lang>`. These assertions exercise the CHINESE wording
+// (the plugin's original language), so pin the document element to zh before
+// anything translates. A bare Node run has no `document` at all, which would
+// resolve to English and fail every zh assertion below.
+globalThis.document = { documentElement: { lang: 'zh' } }
+
 let failures = 0
 function check(name, actual, expected) {
   const a = JSON.stringify(actual)

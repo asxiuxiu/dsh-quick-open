@@ -16,6 +16,7 @@
  * else (in DSH, Shift+Ctrl+P is the browser/print family), and stealing it
  * would be a surprise the user cannot undo from the UI.
  */
+import { t } from './i18n.ts'
 
 /** Which modifiers the shortcut requires. */
 export interface Shortcut {
@@ -46,18 +47,22 @@ export type ShortcutAction = 'open' | 'find' | 'reference'
 /** Every action, in the order the settings panel shows them. */
 export const SHORTCUT_ACTIONS: readonly ShortcutAction[] = ['open', 'find', 'reference']
 
-/** Human label for each action. */
-export const SHORTCUT_LABELS: Record<ShortcutAction, string> = {
-  open: '呼出快速打开面板',
-  find: '在文件预览里搜索内容',
-  reference: '把选中文件加入对话（面板内）',
+/** Human label for each action, in the active language. */
+export function shortcutLabel(action: ShortcutAction): string {
+  return action === 'open'
+    ? t('shortcutActionOpen')
+    : action === 'find'
+      ? t('shortcutActionFind')
+      : t('shortcutActionReference')
 }
 
-/** One-line explanation of when each action applies. */
-export const SHORTCUT_HINTS: Record<ShortcutAction, string> = {
-  open: '任意会话页面按下即可呼出；再按一次关闭。',
-  find: '焦点在侧边栏文件预览里时生效，打开浮动查找条。',
-  reference: '快速打开面板打开时生效：按住修饰键再回车，把文件作为引用放进草稿，面板不关闭。',
+/** One-line explanation of when each action applies, in the active language. */
+export function shortcutHint(action: ShortcutAction): string {
+  return action === 'open'
+    ? t('shortcutHintOpen')
+    : action === 'find'
+      ? t('shortcutHintFind')
+      : t('shortcutHintReference')
 }
 
 /**
@@ -193,9 +198,9 @@ function keyLabel(key: string): string {
  */
 export function validateShortcut(shortcut: Shortcut): string | undefined {
   if (!shortcut.mod && !shortcut.ctrl && !shortcut.shift && !shortcut.alt) {
-    return '至少需要一个修饰键（Ctrl / Cmd / Shift / Alt）'
+    return t('shortcutNeedsModifier')
   }
-  if (shortcut.key === '' ) return '缺少主键'
+  if (shortcut.key === '' ) return t('shortcutNeedsKey')
   return undefined
 }
 
@@ -285,7 +290,7 @@ export function shortcutFromEvent(event: {
   key: string, ctrlKey: boolean, metaKey: boolean, shiftKey: boolean, altKey: boolean
 }, mac: boolean = isMacPlatform()): Shortcut | string {
   const key = bindableKey(event.key)
-  if (key === undefined) return '请按一个字母、数字或符号键（不能只按修饰键）'
+  if (key === undefined) return t('shortcutPressKeys')
   // The recorder records what the user PRESSED and names it the way their
   // platform does, so pressing Cmd on a Mac stores `mod` (not a Mac-only flag)
   // and the same setting reads correctly if the config is copied to Windows.

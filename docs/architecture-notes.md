@@ -138,12 +138,60 @@ Object.values(ctx.sessions.list.getSnapshot().byId)
 
 ---
 
-## 五、验证方式
+## 五、国际化（zh / en）
+
+### 文案集中在一张表，且「漏译」是编译错误
+
+所有用户可见文案在 `src/client/i18n.ts`。两张表都标注为 `Messages`，所以
+「英文加了键、中文忘了加」直接编译失败——这比靠 review 靠谱。
+
+### 语言从 `<html lang>` 读，每次取文案都重读
+
+```ts
+const lang = document.documentElement.lang ?? ''
+return lang.toLowerCase().startsWith('zh') ? 'zh' : 'en'
+```
+
+DSH 外壳会按用户的 locale 偏好设置这个属性。**每次调用都重读而不是模块加载时捕获**：
+外壳可以在不刷新页面的情况下改掉它，捕获的值会让插件停留在旧语言。非 `zh*` 一律回落英文。
+
+### 为什么没用 `ctx.locale`
+
+DSH 自带 locale 服务（`register(ns, {zh, en})` + `bind(ns)`），本插件没有用它，因为插件的
+两半在「什么时候存在」上不一致：预览增强把 React root 挂在 slot 树**之外**
+（理由见 `preview/index.ts`），而 controller 是从不持有 context 的异步回调里取文案。
+两者都得把 context 一路穿进去，而 context 缺失时还是得回落英文。直接读
+`documentElement.lang` 得到同样的可观测行为——语言正确、切换即时——却不需要任何管线，
+也不存在「面板是中文但浮层是英文」这种失败态。
+
+代价：client 插件无法在这里**新增**语言，加一种语言就是加一张表。对双语插件这是划算的，
+而且整块文案能被现有桩测试覆盖。
+
+### 占位符用 `{name}`，取不到就原样保留
+
+`t('indexInfo', { count, age })`。没有对应参数的占位符**原样留下**而不是清空：
+界面上出现字面的 `{count}` 是一条 bug 报告，而空字符串看起来像有意为之，会把遗漏藏起来。
+
+### 中文在构建产物里是 `\uXXXX` 转义
+
+esbuild 默认 `charset: 'ascii'`，所以 `lib/client.js` 里的中文是转义序列。
+用 `grep 无匹配文件` 查产物**查不到**，要查 `\u65E0\u5339\u914D\u6587\u4EF6`——
+这不是丢失，运行时字符串完全一致（0.2.2 及更早的产物一直如此）。
+
+### 语言切换要覆盖「写进草稿的文本」
+
+引用文本（`preview/selection.ts` 的 `path-hint` 格式）会进入会话草稿，属于用户可见输出，
+所以它也走 `t()`。`verify-i18n.mjs` 对这一点有断言：同一份输入在两种语言下必须产生**不同**的草稿文本。
+
+---
+
+## 六、验证方式
 
 | 脚本 | 覆盖 |
 |---|---|
 | `scripts/verify-preview.mjs` | 纯逻辑：地址解析、引用格式、跨文本节点匹配 |
 | `scripts/verify-client-bundle.mjs` | 端到端桩测试：不注册 tab type、内置预览保住地址、**Ctrl+P 真的被认领（有会话时）/ 裸 p 透传**、Ctrl+F 无预览时透传/有预览时认领、搜索计数、选区浮框→写草稿→通知、z-index 与高亮名契约 |
+| `scripts/verify-i18n.mjs` | 双语键位对齐、无空值/漏译、占位符在翻译后仍存在、语言回落、插值、**草稿引用文本随语言变化** |
 | `scripts/verify-deploy.ps1` | **部署核对**：DSH 实际服务的那份 `lib/client.js` 是否就是本仓库的构建产物（字节比对 + `artifactRevision`） |
 
 `verify-deploy.ps1` 存在的理由：DSH Desktop 把第三方插件放在

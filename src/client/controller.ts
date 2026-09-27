@@ -34,6 +34,7 @@
  */
 import type { Context, SessionScope, SidebarRightServiceLike } from './types.ts'
 import type { MatchSpan, QuickOpenStore, SearchEntry } from './store.ts'
+import { t } from './i18n.ts'
 
 /** Debounce before a keystroke becomes a search request (ms). */
 const SEARCH_DEBOUNCE_MS = 100
@@ -383,7 +384,7 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
   ): Promise<{ entries: SearchEntry[]; truncated: boolean; indexInfo: string | null }> => {
     const found = await apiCall<IndexedSearchResult>('/quick-open/api', 'search', scopePayload(scope, { query }), signal)
     const indexInfo = found.indexedEntries !== undefined
-      ? `索引 ${found.indexedEntries.toLocaleString()} 项 · ${Math.round((found.indexAge ?? 0) / 1000)}s 前`
+      ? t('indexInfo', { count: found.indexedEntries.toLocaleString(), age: Math.round((found.indexAge ?? 0) / 1000) })
       : null
     return { entries: found.matches, truncated: found.truncated, indexInfo }
   }
@@ -636,7 +637,7 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
       .then((found) => {
         if (seq !== searchSeq || controller.signal.aborted) return
         const indexInfo = found.indexedEntries !== undefined
-          ? `索引 ${found.indexedEntries.toLocaleString()} 项 · ${Math.round((found.indexAge ?? 0) / 1000)}s 前`
+          ? t('indexInfo', { count: found.indexedEntries.toLocaleString(), age: Math.round((found.indexAge ?? 0) / 1000) })
           : null
         store.set({
           searching: false,
@@ -647,7 +648,7 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
           selected: 0,
           error: null,
           indexInfo,
-          notice: prefix === '' ? '工作区根目录' : `进入 ${prefix}/`,
+          notice: prefix === '' ? t('paletteWorkspaceRoot') : t('enteredDir', { prefix }),
         })
       })
       .catch((failure: unknown) => {
@@ -686,13 +687,13 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
     const scope = currentScope()
     if (scope === undefined) return
     if (await resolveIsDir(scope, entry)) {
-      notice('这是目录：Ctrl+Enter 以 @dir/ 引用')
+      notice(t('dirNeedsReference'))
       reclaimFocus()
       return
     }
     const service = sidebarRight()
     if (service === undefined) {
-      notice('侧边栏服务未就绪，暂时无法打开文件')
+      notice(t('sidebarUnavailable'))
       reclaimFocus()
       return
     }
@@ -711,7 +712,7 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
     } catch (error) {
       // An address no registered tab type claims throws in the navigation
       // face; surface it instead of letting the overlay vanish silently.
-      notice(error instanceof Error ? error.message : '无法打开这个文件')
+      notice(error instanceof Error ? error.message : t('openFailed'))
       reclaimFocus()
       return
     }
@@ -770,14 +771,14 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
     const kind = await resolveIsDir(scope, entry) ? 'directory' as const : 'file' as const
     const reference = fileMention(referencePath, kind)
     if (reference === undefined) {
-      notice('路径包含无法引用的字符')
+      notice(t('unquotablePath'))
       reclaimFocus()
       return
     }
     if (appendReferenceText(scope.sessionId, reference)) {
       pushRecent(entry)
     } else {
-      notice('对话服务不可用')
+      notice(t('noConversation'))
     }
     // The composer grabbed focus while appending — take it back so the next
     // keystroke still goes to the search box.

@@ -35,6 +35,7 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent as 
 import type { QuickOpenController } from './controller.ts'
 import type { MatchSpan } from './store.ts'
 import { isImeComposition } from './ime-guard.ts'
+import { t } from './i18n.ts'
 import { describeShortcut, matchesShortcut, modifiersMatch, readShortcut, readShortcuts } from './shortcut.ts'
 
 const styles: Record<string, CSSProperties> = {
@@ -426,20 +427,20 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
   const body = (): ReactNode => {
     if (state.listKind === 'recents') {
       if (state.matches.length === 0) {
-        return <div style={styles.status}>输入以搜索当前工作区的文件</div>
+        return <div style={styles.status}>{t('paletteIdle')}</div>
       }
     } else if (state.listKind === 'drill' && !state.searching && state.matches.length === 0) {
-      return <div style={styles.status}>该目录为空</div>
+      return <div style={styles.status}>{t('paletteEmptyDir')}</div>
     } else if (state.searching && state.matches.length === 0) {
-      return <div style={styles.status}>搜索中…</div>
+      return <div style={styles.status}>{t('paletteSearching')}</div>
     } else if (!state.searching && state.matches.length === 0 && state.error === null) {
-      return <div style={styles.status}>无匹配文件</div>
+      return <div style={styles.status}>{t('paletteNoMatches')}</div>
     }
     return (
       <>
-        {state.listKind === 'recents' && <div style={styles.section}>最近使用</div>}
+        {state.listKind === 'recents' && <div style={styles.section}>{t('paletteRecents')}</div>}
         {state.listKind === 'drill' && (
-          <div style={styles.section}>{state.drillPrefix === '' ? '工作区根目录' : `${state.drillPrefix}/`}</div>
+          <div style={styles.section}>{state.drillPrefix === '' ? t('paletteWorkspaceRoot') : `${state.drillPrefix}/`}</div>
         )}
         <div ref={listRef} style={styles.list} role="listbox">
           {state.matches.map((entry, index) => {
@@ -475,11 +476,11 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
                   <button
                     type="button"
                     style={styles.rowAction}
-                    title="加入对话（Ctrl+Enter）"
+                    title={t('paletteReferenceTitle')}
                     onMouseDown={keepFocus}
                     onClick={(event) => onRowReference(index, event)}
                   >
-                    + 引用
+                    {t('paletteReference')}
                   </button>
                 )}
               </div>
@@ -495,34 +496,34 @@ export function QuickOpenLayer({ controller }: { controller: QuickOpenController
       <div
         style={styles.panel}
         role="dialog"
-        aria-label="快速打开文件"
+        aria-label={t('paletteInputLabel')}
         onKeyDown={onKeyDown}
       >
         <input
           ref={inputRef}
           style={styles.input}
           value={state.query}
-          placeholder="模糊搜索文件名；空格分词，dir: 前缀限定目录（如 dir:ui index.html）"
+          placeholder={t('palettePlaceholder')}
           spellCheck={false}
           onChange={(event) => controller.setQuery(event.target.value)}
         />
         {body()}
-        {state.error !== null && <div style={styles.error}>搜索失败：{state.error}</div>}
+        {state.error !== null && <div style={styles.error}>{t('paletteError')}{state.error}</div>}
         {state.notice !== null && <div style={styles.notice}>{state.notice}</div>}
         <div style={styles.footer}>
-          <span>↑↓ 导航</span>
-          <span>Tab 补全路径</span>
-          <span>Enter 打开</span>
-          <span>:行号 跳行</span>
+          <span>{t('hintNavigate')}</span>
+          <span>{t('hintComplete')}</span>
+          <span>{t('hintOpen')}</span>
+          <span>{t('hintLine')}</span>
           {/* The bound combinations, not hardcoded ones: both gestures are
               customizable, so a fixed label would be wrong the moment the user
               changes them. */}
-          <span>{describeShortcut(boundShortcuts.reference)} 加入对话（不关闭）</span>
-          <span>{describeShortcut(boundShortcuts.open)} 开关</span>
-          <span>dir: 限定目录</span>
-          <span>file: 限定文件名</span>
-          <span>Esc 关闭</span>
-          {state.truncated && <span>结果已截断，请细化关键词</span>}
+          <span>{t('hintReference', { keys: describeShortcut(boundShortcuts.reference) })}</span>
+          <span>{t('hintToggle', { keys: describeShortcut(boundShortcuts.open) })}</span>
+          <span>{t('hintDirScope')}</span>
+          <span>{t('hintFileScope')}</span>
+          <span>{t('hintClose')}</span>
+          {state.truncated && <span>{t('hintTruncated')}</span>}
           {state.indexInfo !== null && <span style={{ marginLeft: 'auto' }}>{state.indexInfo}</span>}
         </div>
       </div>

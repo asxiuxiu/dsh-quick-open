@@ -1,10 +1,16 @@
 /**
- * Preview-augmentation copy. Kept in one dictionary so the surface is
- * translatable as a unit and every user-visible string is reviewable in one
- * place.
+ * Preview-augmentation copy.
+ *
+ * The strings themselves now live in the plugin-wide table (`../i18n.ts`) so
+ * every user-visible string ships in one reviewable place and the two surfaces
+ * cannot drift into different wording for the same idea. This module keeps the
+ * preview surface's own KEY NAMES as a thin, typed alias, because they read
+ * better at the call site than the table's namespaced keys and because the
+ * augmentation's tests assert against them.
  */
+import { messages, type Messages } from '../i18n.ts'
 
-/** The augmentation's message keys. */
+/** The augmentation's message keys, mapped onto the shared table. */
 export interface PreviewMessages {
   noConversation: string
   added: string
@@ -19,40 +25,27 @@ export interface PreviewMessages {
   partialCoverageHint: string
 }
 
-const en: PreviewMessages = {
-  noConversation: 'The conversation service is unavailable.',
-  added: 'Added to conversation',
-  addSelection: 'Add to conversation',
-  findPlaceholder: 'Find in file',
-  findPrevious: 'Previous match (Shift+Enter)',
-  findNext: 'Next match (Enter)',
-  findClose: 'Close (Esc)',
-  findCaseSensitive: 'Match case',
-  noResults: 'No results',
-  partialCoverage: 'loaded part',
-  partialCoverageHint: 'The file has pages not yet loaded; only the loaded part was searched.',
-}
-
-const zh: PreviewMessages = {
-  noConversation: '对话服务不可用。',
-  added: '已加入会话',
-  addSelection: '加入会话',
-  findPlaceholder: '在文件中查找',
-  findPrevious: '上一个匹配（Shift+Enter）',
-  findNext: '下一个匹配（Enter）',
-  findClose: '关闭（Esc）',
-  findCaseSensitive: '区分大小写',
-  noResults: '无结果',
-  partialCoverage: '仅已加载',
-  partialCoverageHint: '文件还有未加载的部分，搜索结果只覆盖已加载的内容。',
+/** Preview key -> shared table key. */
+const KEYS: Record<keyof PreviewMessages, keyof Messages> = {
+  noConversation: 'previewNoConversation',
+  added: 'previewAdded',
+  addSelection: 'previewAddSelection',
+  findPlaceholder: 'previewFindPlaceholder',
+  findPrevious: 'previewFindPrevious',
+  findNext: 'previewFindNext',
+  findClose: 'previewFindClose',
+  findCaseSensitive: 'previewFindCaseSensitive',
+  noResults: 'previewNoResults',
+  partialCoverage: 'previewPartialCoverage',
+  partialCoverageHint: 'previewPartialCoverageHint',
 }
 
 /**
- * The active language, read from the document element the app sets it on.
- * Read per call rather than captured, so a locale switch needs no reload.
+ * Look up one preview string in the active language.
+ *
+ * Language resolution lives in `../i18n.ts` (read from `<html lang>` per call,
+ * so a locale switch needs no reload).
  */
 export function t<K extends keyof PreviewMessages>(key: K): string {
-  const lang = typeof document === 'undefined' ? 'en' : document.documentElement.lang
-  const dictionary = lang.toLowerCase().startsWith('zh') ? zh : en
-  return dictionary[key]
+  return messages()[KEYS[key]]
 }
