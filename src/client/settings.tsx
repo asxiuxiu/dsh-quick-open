@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { Context, SessionScope } from './types.ts'
+import { readActiveScope } from './controller.ts'
 import { readSelectionFormat, writeSelectionFormat, type SelectionFormat } from './preview/selection.ts'
 import {
   DEFAULT_SHORTCUTS,
@@ -585,14 +586,14 @@ export function QuickOpenSettings({ ctx }: { ctx: Context }): React.ReactElement
   )
 }
 
-/** The active session's scope, or undefined when nothing is open. */
-function readScope(ctx: Context): SessionScope | undefined {
-  const snapshot = ctx.sessions.list.getSnapshot()
-  const sessionId = snapshot.current
-  if (sessionId === undefined) return undefined
-  const cwd = snapshot.byId[sessionId]?.cwd
-  return { sessionId, ...(cwd !== undefined && cwd !== '' ? { cwd } : {}) }
-}
+/**
+ * The active session's scope, or undefined when nothing is open.
+ *
+ * Delegates to the controller's reader so the settings panel and the Ctrl+P
+ * layer can never disagree about which session they are configuring — they
+ * used to carry two copies of the same (wrong) `snapshot.current` lookup.
+ */
+const readScope = readActiveScope
 
 /** The slot registration consumed by the client entry's `apply`. */
 export const quickOpenSettingsSection = {

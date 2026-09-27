@@ -46,6 +46,36 @@ const RECENTS_CAP = 15
 /** Cap of the query-result LRU cache. */
 const QUERY_CACHE_CAP = 10
 
+/**
+ * The active session's scope, read from the client session list.
+ *
+ * The list snapshot has NO `current` / `activeSessionId` key — the official
+ * client marks the session the main view shows by RETAINING it under the
+ * `mainView` source, so a row with `retainedBy.mainView > 0` IS the active
+ * one. This is the same filter the app's own plugins use
+ * (`dsh-client-ui-workspace`, `-session`, `-layout`, `-cordis`,
+ * `-open-in-app`, `-agent-preset`).
+ *
+ * Two traps this avoids:
+ * - `byId` also holds subagent child rows (`origin: 'subagent'`), so taking
+ *   the first row — or `ids[0]` — can land on a child instead of the session
+ *   the user is looking at.
+ * - `mainView` retention is a COUNT, not a boolean; `?? 0` keeps the compare
+ *   total when the key is absent.
+ */
+export function readActiveScope(ctx: Context): SessionScope | undefined {
+  const snapshot = ctx.sessions.list.getSnapshot()
+  for (const row of Object.values(snapshot.byId)) {
+    if (row === undefined) continue
+    if ((row.retainedBy?.mainView ?? 0) <= 0) continue
+    const sessionId = row.id
+    if (sessionId === undefined || sessionId === '') continue
+    const cwd = row.cwd
+    return { sessionId, ...(cwd !== undefined && cwd !== '' ? { cwd } : {}) }
+  }
+  return undefined
+}
+
 /** POSIX roots, drive letters and UNC shares must not be joined onto cwd. */
 function isAbsolutePath(path: string): boolean {
   return /^(?:[\\/]|[a-zA-Z]:[\\/]|\\\\)/.test(path)
@@ -191,13 +221,7 @@ export function createQuickOpenController(ctx: Context, store: QuickOpenStore) {
   const queryCache = new Map<string, { entries: SearchEntry[]; complete: boolean }>()
 
   /** The active session's scope (id + cwd when hydrated); undefined without a session. */
-  const currentScope = (): SessionScope | undefined => {
-    const snapshot = ctx.sessions.list.getSnapshot()
-    const sessionId = snapshot.current
-    if (sessionId === undefined) return undefined
-    const cwd = snapshot.byId[sessionId]?.cwd
-    return { sessionId, ...(cwd !== undefined && cwd !== '' ? { cwd } : {}) }
-  }
+  const currentScope = (): SessionScope | undefined => readActiveScope(ctx)
 
   const scopeKeyOf = (scope: SessionScope): string => `${scope.sessionId}\n${scope.cwd ?? ''}`
 

@@ -76,6 +76,44 @@ Ctrl+P 浮层挂在 `conversation.input.overlay` slot 里，该 slot 位于 comp
 不能用小写副本比对。`ß`、`İ` 这类字符大小写折叠后长度会变，会让 Range 偏移错位。
 `preview/find.ts` 因此用 `new RegExp(..., 'giu')` 直接匹配原文。
 
+### 「活动会话」必须靠 `retainedBy.mainView`，快照里没有 `current`
+
+会话列表快照的真实形状**只有四个键**（`dsh-api-session-controller/lib/client.js`
+的初始值与其唯一一次全量 `list.set`）：
+
+```
+{ ids, byId, phase, projectionsBySession }
+```
+
+**没有 `current` / `activeSessionId`**。官方客户端标记「主视图正在展示哪个会话」的方式是
+用 `mainView` 这个 retain 来源**保留**它，所以 `retainedBy.mainView > 0` 才是唯一受支持的
+判定。全应用一致的写法（8 个包、18 处）：
+
+```js
+Object.values(ctx.sessions.list.getSnapshot().byId)
+  .find((row) => (row.retainedBy.mainView ?? 0) > 0)
+```
+
+出现于 `dsh-client-ui-workspace` / `-session`（`isMain()`）/ `-layout` / `-cordis` /
+`-open-in-app` / `-agent-preset` / `-experimental-agent-team`。
+`mainView` 由 `sessions.retain(target, { source: 'mainView' })` 声明
+（`dsh-client-ui-workspace`）。
+
+两个必须避开的坑：
+
+- `byId` **同时包含 subagent 子会话行**（`origin: 'subagent'`），所以「取第一行」或
+  `ids[0]` 可能拿到子会话，而不是用户正在看的那个。
+- `mainView` 是**计数**不是布尔，用 `?? 0` 兜底。
+
+**这个 bug 曾经以最隐蔽的方式存活过**：`scripts/verify-client-bundle.mjs` 的桩把
+`getSnapshot()` 写成了 `{ current: 'sess-1', byId: {...} }` —— 桩**凭空发明了**那个运行时
+从不设置的字段。于是桩和实现共享同一个错误契约，测试全绿而线上 Ctrl+P 完全无反应
+（`canServe()` 恒 `false`，且它在 `preventDefault()` **之前**返回，所以既不报错也不留日志）。
+
+教训：**镜子照出 bug 就抓不到 bug**。桩必须逐字复刻生产形状；`sessions` 桩现已改为真实的
+四键快照，并**故意把 subagent 子行排在前面**，任何「取第一行」的回归都会在这里失败。
+断言也从「注册了几个 keydown 监听器」升级为**真的派发 Ctrl+P 并断言 `preventDefault` 被调用**。
+
 ---
 
 ## 三、依赖与降级
@@ -105,7 +143,18 @@ Ctrl+P 浮层挂在 `conversation.input.overlay` slot 里，该 slot 位于 comp
 | 脚本 | 覆盖 |
 |---|---|
 | `scripts/verify-preview.mjs` | 纯逻辑：地址解析、引用格式、跨文本节点匹配 |
-| `scripts/verify-client-bundle.mjs` | 端到端桩测试：不注册 tab type、内置预览保住地址、Ctrl+F 无预览时透传/有预览时认领、搜索计数、选区浮框→写草稿→通知、z-index 与高亮名契约 |
+| `scripts/verify-client-bundle.mjs` | 端到端桩测试：不注册 tab type、内置预览保住地址、**Ctrl+P 真的被认领（有会话时）/ 裸 p 透传**、Ctrl+F 无预览时透传/有预览时认领、搜索计数、选区浮框→写草稿→通知、z-index 与高亮名契约 |
+| `scripts/verify-deploy.ps1` | **部署核对**：DSH 实际服务的那份 `lib/client.js` 是否就是本仓库的构建产物（字节比对 + `artifactRevision`） |
+
+`verify-deploy.ps1` 存在的理由：DSH Desktop 把第三方插件放在
+`$DSH_HOME/profiles/.generations/live/<name>+<version>+<hash>/` 下，并在**每次启动时**
+按 `package.json` 的 `dsh.desktop.generationProjection` **重建指向它的 junction**。
+所以改 junction 或改 `pnpm.overrides` 都会被启动维护**改回去**（投射器还会把你加的
+override 记进 `previousOverride` 并清除）。正确做法是把构建产物**复制进 generation 目录
+本身**——它是真实目录，投射只管理指向它的链接。
+
+另注：判断 bundle 是否变化的 `artifactRevision` 哈希的是**文件元数据**
+（`mtimeMs` / `ctimeMs` / `size`），**不是内容**。改动若恰好不改变文件大小，缓存不会失效。
 
 桩的有效性用**「故意改坏 → 断言必须失败」**验证过（把 z-index 改成 60、删掉
 `preventDefault`，断言均如期 FAIL）。

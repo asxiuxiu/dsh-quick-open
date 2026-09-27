@@ -352,7 +352,29 @@ const ctx = {
   sessions: {
     list: {
       subscribe: () => () => {},
-      getSnapshot: () => ({ current: 'sess-1', byId: { 'sess-1': { cwd: 'E:/cb2_master/dev/chaos' } } }),
+      // The REAL snapshot shape, verbatim from the client session controller
+      // (`dsh-api-session-controller/lib/client.js`): only `ids` / `byId` /
+      // `phase` / `projectionsBySession`. There is NO `current` key.
+      //
+      // This stub used to invent `current: 'sess-1'`, which is the one field
+      // the runtime never sets. Because the double encoded the same wrong
+      // contract as the code, every assertion below passed while the shipped
+      // plugin resolved no session at all — and Ctrl+P was inert in the real
+      // app. A stub that mirrors the bug cannot catch the bug: the test only
+      // has value if this object is a faithful copy of production.
+      //
+      // `mainView` retention is how the active session is marked (a COUNT,
+      // not a boolean), and a subagent child row is deliberately listed FIRST
+      // so a "take the first row" regression fails here.
+      getSnapshot: () => ({
+        ids: ['sess-sub', 'sess-1'],
+        byId: {
+          'sess-sub': { id: 'sess-sub', origin: 'subagent', retainedBy: {}, cwd: 'E:/wrong' },
+          'sess-1': { id: 'sess-1', retainedBy: { mainView: 1 }, cwd: 'E:/cb2_master/dev/chaos' },
+        },
+        phase: 'ready',
+        projectionsBySession: {},
+      }),
     },
     scope: () => ({ emit: () => {} }),
   },
@@ -478,6 +500,75 @@ if (keydownHandlers.length < 2) {
 } else {
   ok(`${keydownHandlers.length} window keydown listeners registered`)
 }
+
+// ── the Ctrl+P chord must actually be CLAIMED ───────────────────────────────
+//
+// Counting listeners is not enough, and that gap is exactly how the
+// `snapshot.current` bug shipped: the listener was registered and inert,
+// because the handler bails on `!controller.canServe()` BEFORE touching the
+// event. So drive the real chord through the registered handlers and assert
+// the event is swallowed. A session-less snapshot is the other half of the
+// contract (see the `sessions` stub above).
+function pressCtrlP() {
+  const event = {
+    key: 'p',
+    ctrlKey: true,
+    metaKey: false,
+    shiftKey: false,
+    altKey: false,
+    isComposing: false,
+    repeat: false,
+    keyCode: 80,
+    defaultPrevented: false,
+    preventDefault() { this.defaultPrevented = true },
+    stopPropagation() { this.propagationStopped = true },
+  }
+  for (const handler of keydownHandlers) {
+    try { handler(event) } catch { /* a sibling listener must not mask ours */ }
+  }
+  return event
+}
+
+const ctrlP = pressCtrlP()
+if (!ctrlP.defaultPrevented) {
+  fail('Ctrl+P was NOT claimed — the handler bailed before preventDefault, so the palette cannot open (a session-resolution regression)')
+} else {
+  ok('Ctrl+P is claimed (the active session resolved)')
+}
+if (!ctrlP.propagationStopped) {
+  fail('Ctrl+P did not stopPropagation — the browser default will also fire')
+} else {
+  ok('Ctrl+P stops propagation')
+}
+
+// A bare "p" must NOT be claimed, or typing in the composer breaks.
+const bareP = (() => {
+  const event = {
+    key: 'p', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false,
+    isComposing: false, repeat: false, keyCode: 80, defaultPrevented: false,
+    preventDefault() { this.defaultPrevented = true }, stopPropagation() {},
+  }
+  for (const handler of keydownHandlers) {
+    try { handler(event) } catch { /* ignore */ }
+  }
+  return event
+})()
+if (bareP.defaultPrevented) {
+  fail('a bare "p" keystroke was swallowed — typing into the composer would break')
+} else {
+  ok('a bare "p" passes through to the composer')
+}
+
+// Close the palette again. Ctrl+P toggles, so a second press shuts it; leaving
+// it open would let the quick-open layer own Esc and silently break the
+// find-bar assertions below (which is what happened when this check was added).
+const ctrlPClose = pressCtrlP()
+if (ctrlPClose.defaultPrevented !== true) {
+  fail('the second Ctrl+P was not claimed — the palette does not toggle closed')
+} else {
+  ok('a second Ctrl+P toggles the palette closed')
+}
+
 for (const name of ['selectionchange', 'mousedown']) {
   if ((log.documentListeners[name] ?? []).length === 0) {
     fail(`no document "${name}" listener — the selection popup cannot work`)

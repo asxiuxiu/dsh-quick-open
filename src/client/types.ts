@@ -15,12 +15,30 @@ export interface SessionContext {
   emit(name: string, payload: unknown): void
 }
 
+/**
+ * One row of the client session list (`sessions.list.getSnapshot().byId`).
+ *
+ * The list snapshot carries NO `current`/`activeSessionId` field: the official
+ * client marks the session the main view is showing by RETAINING it under the
+ * `mainView` source, so `retainedBy.mainView > 0` is the one supported way to
+ * find the active session. Every app-side consumer reads it that way
+ * (dsh-client-ui-workspace, -session, -layout, -cordis, -open-in-app,
+ * -agent-preset). A row also exists for subagent children (`origin`), which
+ * makes "first row wins" wrong — the retention filter is what selects.
+ */
+export interface SessionListRow {
+  id?: string
+  cwd?: string
+  retainedBy?: Record<string, number | undefined>
+  origin?: string
+}
+
 export interface SessionsService {
   list: {
     subscribe(listener: () => void): () => void
     getSnapshot(): {
-      current?: string
-      byId: Record<string, { cwd?: string } | undefined>
+      ids?: string[]
+      byId: Record<string, SessionListRow | undefined>
     }
   }
   scope(sessionId: string): SessionContext | undefined
