@@ -1,3 +1,10 @@
 node_modules/
 *.log
 cm.txt
+
+# Never commit npm credentials. A project-scoped .npmrc is a convenient place
+# to hold a publish token, and this repository is public — one `git add -A`
+# would publish the token with it. The tracked lockfile is package-lock.json
+# (npm); pnpm-lock.yaml is a local-install artifact only.
+.npmrc
+pnpm-lock.yaml
