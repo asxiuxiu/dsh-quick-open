@@ -1,6 +1,6 @@
 {
   "name": "dsh-quick-open",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "DSH web plugin: VSCode-style Ctrl+P quick open — search workspace files with a fuzzy matcher, open them in the native right Sidebar, or drop a file reference into the conversation draft.",
   "license": "MIT",
   "type": "module",
@@ -48,7 +48,10 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify": "node scripts/verify-client-bundle.mjs",
+    "verify:deploy": "node scripts/verify-deploy.mjs",
+    "check": "tsc --noEmit && node scripts/build.mjs && node scripts/verify-client-bundle.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
