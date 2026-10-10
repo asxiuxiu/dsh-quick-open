@@ -138,6 +138,27 @@ dsh plugin --profile web add link:D:/dev/dsh-quick-open       # local developmen
 
 **Restart DSH after installing** (the host half mounts only at boot). It depends on DSH itself and on no third-party sidebar plugin.
 
+### Host version requirement
+
+The peer declarations cover DSH `0.1.5-rc.1` through `0.2.x` (excluding `0.3.0`):
+
+```
+@deepseek-ai/dsh-client-ui-slots             >=0.1.5-rc.1 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0 || >=0.2.1-alpha.1 <0.3.0-0
+@deepseek-ai/dsh-client-ui-conversation      >=0.1.1-rc.1 <0.1.2-0 || >=0.1.2-rc.1 <0.1.3-0 || >=0.1.5-rc.1 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0 || >=0.2.1-alpha.1 <0.3.0-0
+@deepseek-ai/dsh-client-ui-sidebar-right     >=0.1.5-rc.1 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0 || >=0.2.1-alpha.1 <0.3.0-0
+@deepseek-ai/cordis                          ^4.0.2
+```
+
+Why the range is this "union of lanes" rather than a single `>=0.1.5-rc.1 <0.3.0`: per the semver
+spec, **a prerelease version only satisfies a range when a comparator in the same tuple carries a
+prerelease tag**. DSH ships its client packages on `0.2.0-rc.N` / `0.2.1-alpha.N` prerelease lanes,
+so the upper bound must carry `-0` and every prerelease lane has to be listed explicitly —
+otherwise npm judges those versions unsatisfied.
+
+> ⚠️ Releases up to and including 0.3.0 declared `>=0.1.5-rc.1 <0.2.0-0`, which shut out both
+> `0.1.7-rc.*` and `0.2.x`. Once DSH moved to 0.1.7 / 0.2.0 the market refused to install it
+> outright ("host incompatible"). When an install is refused, check this section first.
+
 ## Configuration (optional)
 
 It works out of the box: with no config file it uses built-in **language-neutral, project-neutral** defaults (excluding only the noise directories every ecosystem agrees on, plus source extensions common across languages).
@@ -174,9 +195,10 @@ Saving is atomic, takes effect within 3 seconds, and needs no restart. Why the r
 npm install
 npm run build       # emits lib/index.js (host: the index routes) + lib/client.js (the __ModuleLoader__ envelope, ~80KB)
 npm run typecheck
-npm run check       # typecheck + build + the client-bundle suite
+npm run check       # typecheck + peer ranges + build + the client-bundle suite
 
 # Verification scripts
+node scripts/check-peer-ranges.mjs       # peer ranges actually accept the lanes they claim (0.1.x / 0.2.x)
 node scripts/verify-i18n.mjs             # key parity, no untranslated/empty values, placeholder survival
 node scripts/verify-client-bundle.mjs    # end-to-end stub test of the built artifact (incl. Ctrl+P being claimed)
 node scripts/verify-grammar.mjs          # dir:/file: prefix parsing boundaries

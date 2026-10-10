@@ -138,6 +138,26 @@ dsh plugin --profile web add link:D:/dev/dsh-quick-open       # 本地开发
 
 安装后**重启 DSH**（host 半只在 boot 时挂载）。只依赖 DSH 本体，不依赖任何第三方侧边栏插件。
 
+### 宿主版本要求
+
+peer 声明覆盖 DSH 的 `0.1.5-rc.1` 至 `0.2.x`（不含 `0.3.0`）：
+
+```
+@deepseek-ai/dsh-client-ui-slots             >=0.1.5-rc.1 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0 || >=0.2.1-alpha.1 <0.3.0-0
+@deepseek-ai/dsh-client-ui-conversation      >=0.1.1-rc.1 <0.1.2-0 || >=0.1.2-rc.1 <0.1.3-0 || >=0.1.5-rc.1 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0 || >=0.2.1-alpha.1 <0.3.0-0
+@deepseek-ai/dsh-client-ui-sidebar-right     >=0.1.5-rc.1 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0 || >=0.2.1-alpha.1 <0.3.0-0
+@deepseek-ai/cordis                          ^4.0.2
+```
+
+范围为什么要写成这种「多段并集」而不是一句 `>=0.1.5-rc.1 <0.3.0`：按 semver 规范，
+**预发布版本只有在同元组的比较器里出现过预发布标识时才算满足**。DSH 的客户端包按
+`0.2.0-rc.N` / `0.2.1-alpha.N` 这种预发布节奏发布，所以上界必须带 `-0`、且每一段
+预发布线都要单独列出来，否则 npm 会把它们判成「不满足」。
+
+> ⚠️ 旧版本（≤0.3.0）声明的是 `>=0.1.5-rc.1 <0.2.0-0`，把 `0.1.7-rc.*` 和 `0.2.x`
+> 全挡在外面——DSH 升到 0.1.7 / 0.2.0 之后市场会直接拒绝安装（提示宿主不兼容）。
+> 遇到「插件装不上」先核对本节的版本范围。
+
 ## 配置（可选）
 
 开箱即用：没有配置文件时使用内置的**语言中立、项目中立**默认规则（只排除各生态公认的噪音目录 + 跨语言通用源码后缀）。
@@ -174,9 +194,10 @@ dsh plugin --profile web add link:D:/dev/dsh-quick-open       # 本地开发
 npm install
 npm run build       # 产出 lib/index.js（host：索引路由）+ lib/client.js（__ModuleLoader__ 封装，约 80KB）
 npm run typecheck
-npm run check       # typecheck + build + 构建产物端到端桩测试
+npm run check       # typecheck + peer 版本范围 + build + 构建产物端到端桩测试
 
 # 验证脚本
+node scripts/check-peer-ranges.mjs       # peer 范围是否真的覆盖它声称支持的线路（0.1.x / 0.2.x）
 node scripts/verify-i18n.mjs             # 双语键位对齐、无漏译/空值、占位符不丢失
 node scripts/verify-client-bundle.mjs    # 构建产物的端到端桩测试（含 Ctrl+P 确实被认领）
 node scripts/verify-grammar.mjs          # dir:/file: 前缀解析边界
