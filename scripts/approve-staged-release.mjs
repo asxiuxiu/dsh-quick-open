@@ -1,27 +1,24 @@
 /**
- * Approve the staged npm release.
+ * Inspect the staged npm release and approve it.
  *
- * Two npm-side constraints shape this script:
+ * Three npm-side constraints shape this script:
  *
- * 1. Staging (`npm stage publish`) requires npm >= 11.15, so it pins npm@12
- *    rather than using whatever npm the machine has.
- * 2. Approving is a proof-of-presence step. When the account requires a
- *    one-time code, a granular 2FA-bypass token cannot supply it — the registry
- *    answers E404, not a prompt. So approval is documented as an interactive
- *    `npm login` step, and this script's job is to hand over the right
- *    stage-id and print the commands, without ever holding a credential.
+ * 1. Staging and approving need npm >= 11.15, so it pins npm@12 rather than
+ *    using whatever npm the machine has (10.9.8 has no `stage` subcommand at all).
+ * 2. `npm stage list --json` emits UTF-8 with a BOM, which JSON.parse rejects.
+ * 3. `npx` routes the call through `npm exec`, whose banner lands on stderr even
+ *    on success and whose redaction rewrites the stage id to `***` in error
+ *    messages — the id on the wire is intact, the message just cannot be trusted.
  *
- * The stage id is read from `npm stage list --json` rather than typed by hand,
- * so a copy that picked up a BOM or a stray space cannot turn into a confusing
- * "staged version not found".
+ * Approved releases stop being listed, so an empty `npm stage list` is the
+ * success signal; the version also appears in `npm view <pkg> versions`.
  *
  * Usage:
- *   node scripts/approve-staged-release.mjs            # show the staged release and how to approve it
- *   node scripts/approve-staged-release.mjs --approve  # run the approve now (expect an OTP prompt)
+ *   node scripts/approve-staged-release.mjs            # show what is staged and the approve command
+ *   node scripts/approve-staged-release.mjs --approve  # run the approve now
  *
  * Credentials and extra npm flags are forwarded verbatim:
- *   node scripts/approve-staged-release.mjs --//registry.npmjs.org/:_authToken=$NPM_TOKEN
- *   node scripts/approve-staged-release.mjs --userconfig=.npmrc
+ *   node scripts/approve-staged-release.mjs --approve --//registry.npmjs.org/:_authToken=$NPM_TOKEN
  */
 import { execFileSync } from 'node:child_process'
 
@@ -37,39 +34,54 @@ const npmStage = (args, options = {}) =>
   })
 
 const list = () => {
-  // The JSON comes back UTF-8 with a BOM, which JSON.parse rejects outright.
-  return JSON.parse(npmStage(['list', '--json']).replace(/^\uFEFF/u, ''))
+  try {
+    return JSON.parse(npmStage(['list', '--json']).replace(/^\uFEFF/u, ''))
+  } catch (error) {
+    // An auth failure surfaces here as E401 before anything else can be reported.
+    console.error(String(error.stderr ?? error.message).trim())
+    process.exit(1)
+  }
 }
 
 const staged = list()
 
 if (staged.length === 0) {
-  console.error('nothing is staged — run `npm stage publish` first')
-  process.exit(1)
+  console.log('nothing is staged — the release has been published (or was never staged)')
+  console.log('confirm with: npm view dsh-quick-open versions --json')
+  process.exit(0)
 }
 
 for (const entry of staged) {
   console.log(`${entry.packageName}@${entry.version}  [${entry.status}]  id=${entry.id}  tag=${entry.tag}`)
 }
 
-if (staged.length > 1 && !process.argv.includes('--approve')) {
-  console.error(`\n${staged.length} staged versions — approve one explicitly:`)
-  console.error('  npx npm@12.2.0 stage approve <id>')
-  process.exit(1)
-}
-
 if (!process.argv.includes('--approve')) {
-  console.log('\nto publish, authenticate interactively and approve:')
-  console.log('  npm login')
-  console.log(`  npx npm@12.2.0 stage approve ${staged[0].id}`)
+  console.log('\nto publish, approve the staged version:')
+  for (const entry of staged) {
+    console.log(`  npx npm@12.2.0 stage approve ${entry.id}`)
+  }
   console.log('\nor re-run this script with --approve to do it now.')
   process.exit(0)
 }
 
+// Approve one at a time: a single call must never be able to publish several
+// versions, and the registry rejects an ambiguous multi-approve anyway.
+if (staged.length > 1) {
+  console.error(`\n${staged.length} staged versions — approve one explicitly:`)
+  for (const entry of staged) {
+    console.error(`  npx npm@12.2.0 stage approve ${entry.id}`)
+  }
+  process.exit(1)
+}
+
 const { id, packageName, version } = staged[0]
-console.log(`\napproving ${packageName}@${version} (${id})`)
-console.log('npm will ask for a one-time code if the account requires one.\n')
+console.log(`\napproving ${packageName}@${version} (${id})\n`)
 
 npmStage(['approve', id], { encoding: undefined, stdio: 'inherit' })
 
-console.log(`\n${packageName}@${version} approved`)
+const remaining = list()
+if (remaining.some((entry) => entry.id === id)) {
+  console.error(`\n${packageName}@${version} is STILL staged — the approve did not take`)
+  process.exit(1)
+}
+console.log(`\n${packageName}@${version} approved — it is no longer staged`)
